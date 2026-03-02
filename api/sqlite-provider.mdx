@@ -4,6 +4,14 @@ description: 'SQL query capabilities via Drizzle ORM for Epicenter workspaces'
 icon: 'database'
 ---
 
+<Warning>
+  **PLANNED FEATURE - NOT YET IMPLEMENTED**
+  
+  This API does not exist in the current codebase. The `sqliteProvider()` function is a planned feature based on the project roadmap. The implementation details below represent the intended design and may change.
+  
+  Do not attempt to use this API - it will result in import errors.
+</Warning>
+
 ## Overview
 
 The `sqliteProvider()` function creates a SQLite extension that syncs workspace data to a SQLite database and provides SQL query capabilities via Drizzle ORM.
@@ -159,14 +167,19 @@ const result = await db.execute('SELECT * FROM posts WHERE published = true');
 The SQLite provider is fully typed based on your workspace definition:
 
 ```typescript
+import { type } from 'arktype';
+
 const definition = defineWorkspace({
   id: 'blog',
   tables: {
-    posts: {
-      id: id(),
-      title: text(),
-      published: boolean({ default: false }),
-    },
+    posts: defineTable(
+      type({
+        id: 'string',
+        title: 'string',
+        published: 'boolean',
+        _v: '1',
+      })
+    ),
   },
 });
 

@@ -4,6 +4,14 @@ description: 'Human-readable markdown file persistence for Epicenter workspaces'
 icon: 'file-lines'
 ---
 
+<Warning>
+  **PLANNED FEATURE - NOT YET IMPLEMENTED**
+  
+  This API does not exist in the current codebase. The `markdownProvider()` function is a planned feature based on the project roadmap. The implementation details below represent the intended design and may change.
+  
+  Do not attempt to use this API - it will result in import errors.
+</Warning>
+
 ## Overview
 
 The `markdownProvider()` function creates a markdown extension that persists workspace data as human-readable markdown files with YAML frontmatter.
@@ -303,15 +311,20 @@ deserialize: ({ frontmatter, body, filename }) => {
 The markdown provider validates data against your workspace schema:
 
 ```typescript
+import { type } from 'arktype';
+
 const definition = defineWorkspace({
   id: 'blog',
   tables: {
-    posts: {
-      id: id(),
-      title: text(),
-      content: text({ nullable: true }),
-      published: boolean({ default: false }),
-    },
+    posts: defineTable(
+      type({
+        id: 'string',
+        title: 'string',
+        content: 'string | null',
+        published: 'boolean',
+        _v: '1',
+      })
+    ),
   },
 });
 

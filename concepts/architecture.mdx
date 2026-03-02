@@ -217,7 +217,6 @@ Extensions are attached during client creation:
 ```typescript
 const client = createWorkspace({ id: 'blog', tables: { posts } })
   .withExtension('persistence', setupPersistence)
-  .withExtension('sqlite', (c) => sqliteProvider(c))
   .withExtension('sync', createSyncExtension({ 
     url: 'ws://localhost:3913/rooms/{id}' 
   }));

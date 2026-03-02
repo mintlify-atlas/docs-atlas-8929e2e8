@@ -6,31 +6,45 @@ icon: "code"
 
 ## Overview
 
-Epicenter uses [arktype](https://arktype.io) for schema definition. All table rows and KV values are validated against arktype schemas at runtime. This page covers common schema patterns for tables and KV stores.
+Epicenter uses [arktype](https://arktype.io) for schema definition. All table rows and KV values are validated against arktype schemas at runtime.
+
+## Imports
+
+```typescript
+import { type } from 'arktype';
+import { defineTable, defineKv } from '@epicenter/workspace';
+```
 
 ## Table Schemas
 
-All table schemas must include two required fields:
+All table schemas must include an `_v` field for versioning:
+
+```typescript
+const users = defineTable(
+  type({ id: 'string', email: 'string', _v: '1' })
+);
+```
+
+### Required Fields
+
+Every table row must have:
 - `id: 'string'` - Unique row identifier
-- `_v: number` - Schema version for migrations
+- `_v: number` - Schema version (literal type like `'1'`, `'2'`, etc.)
 
 ### Basic Types
 
 ```typescript
-import { type } from 'arktype';
-import { defineTable } from '@epicenter/workspace';
-
-// String field
+// String fields
 const users = defineTable(
-  type({ id: 'string', email: 'string', _v: '1' })
+  type({ id: 'string', name: 'string', email: 'string', _v: '1' })
 );
 
-// Number field
+// Number fields
 const posts = defineTable(
-  type({ id: 'string', views: 'number', _v: '1' })
+  type({ id: 'string', views: 'number', likes: 'number', _v: '1' })
 );
 
-// Boolean field
+// Boolean fields
 const todos = defineTable(
   type({ id: 'string', completed: 'boolean', _v: '1' })
 );
@@ -38,12 +52,14 @@ const todos = defineTable(
 
 ### Optional Fields
 
+Mark fields as optional with the `?` suffix:
+
 ```typescript
 const posts = defineTable(
   type({ 
     id: 'string', 
     title: 'string',
-    'description?': 'string',  // Optional field
+    'description?': 'string',  // Optional
     _v: '1'
   })
 );
@@ -64,45 +80,14 @@ const notes = defineTable(
 
 ### Literal Types (Enums)
 
+Use string literal unions for enum-like fields:
+
 ```typescript
 const tasks = defineTable(
   type({ 
     id: 'string',
     status: "'todo' | 'in_progress' | 'done'",
     priority: "'low' | 'medium' | 'high'",
-    _v: '1'
-  })
-);
-```
-
-### Date/Timestamp Fields
-
-```typescript
-const events = defineTable(
-  type({ 
-    id: 'string',
-    createdAt: 'number',        // Unix timestamp in milliseconds
-    updatedAt: 'number',
-    _v: '1'
-  })
-);
-
-// Usage
-tables.events.set({
-  id: '1',
-  createdAt: Date.now(),
-  updatedAt: Date.now(),
-  _v: 1
-});
-```
-
-### JSON Fields
-
-```typescript
-const documents = defineTable(
-  type({ 
-    id: 'string',
-    metadata: 'unknown',        // Any JSON-serializable value
     _v: '1'
   })
 );
@@ -125,78 +110,127 @@ const profiles = defineTable(
 );
 ```
 
-### Numeric Parsing
+### Nullable Types
 
 ```typescript
-// Parse string numbers to actual numbers
-const analytics = defineTable(
+const posts = defineTable(
   type({ 
     id: 'string',
-    views: type('string.numeric.parse'),  // "42" -> 42
+    title: 'string',
+    author: 'string | null',
     _v: '1'
   })
 );
 ```
 
-### Custom Validation
+### Timestamps
+
+Store timestamps as numbers (milliseconds since epoch):
 
 ```typescript
-// Email validation
-const users = defineTable(
+const events = defineTable(
   type({ 
     id: 'string',
-    email: 'email',              // Built-in email validation
+    createdAt: 'number',
+    updatedAt: 'number',
     _v: '1'
   })
 );
 
-// URL validation
-const links = defineTable(
-  type({ 
-    id: 'string',
-    url: 'string.url',           // URL validation
-    _v: '1'
-  })
-);
+// Usage
+tables.events.set({
+  id: '1',
+  createdAt: Date.now(),
+  updatedAt: Date.now(),
+  _v: 1
+});
+```
 
-// Custom constraints
-const products = defineTable(
+### JSON Fields
+
+Use `'unknown'` for fields that can contain any JSON-serializable value:
+
+```typescript
+const documents = defineTable(
   type({ 
     id: 'string',
-    price: 'number>=0',          // Non-negative numbers
-    quantity: 'number>0',        // Positive numbers
+    metadata: 'unknown',
     _v: '1'
   })
 );
+```
+
+## Schema Versioning
+
+Use the builder pattern for tables with multiple versions:
+
+```typescript
+const posts = defineTable()
+  .version(type({ id: 'string', title: 'string', _v: '1' }))
+  .version(type({ id: 'string', title: 'string', views: 'number', _v: '2' }))
+  .migrate((row) => {
+    switch (row._v) {
+      case 1: return { ...row, views: 0, _v: 2 };
+      case 2: return row;
+    }
+  });
+```
+
+### Migration Examples
+
+**Two-version migration:**
+
+```typescript
+const posts = defineTable()
+  .version(type({ id: 'string', title: 'string', _v: '1' }))
+  .version(type({ id: 'string', title: 'string', views: 'number', _v: '2' }))
+  .migrate((row) => {
+    if (row._v === 1) return { ...row, views: 0, _v: 2 };
+    return row;
+  });
+```
+
+**Three-version migration:**
+
+```typescript
+const posts = defineTable()
+  .version(type({ id: 'string', title: 'string', _v: '1' }))
+  .version(type({ id: 'string', title: 'string', views: 'number', _v: '2' }))
+  .version(type({ 
+    id: 'string', 
+    title: 'string', 
+    views: 'number',
+    author: 'string | null',
+    _v: '3' 
+  }))
+  .migrate((row) => {
+    if (row._v === 1) {
+      return { ...row, views: 0, author: null, _v: 3 };
+    }
+    if (row._v === 2) {
+      return { ...row, author: null, _v: 3 };
+    }
+    return row;
+  });
 ```
 
 ## KV Schemas
 
-KV stores are more flexible - the `_v` field is optional.
-
-### Basic KV Store
+KV stores don't require `id` or `_v` fields:
 
 ```typescript
 import { defineKv } from '@epicenter/workspace';
+
+const theme = defineKv(
+  type({ mode: "'light' | 'dark'" })
+);
 
 const sidebar = defineKv(
   type({ collapsed: 'boolean', width: 'number' })
 );
 ```
 
-### KV with Literal Types
-
-```typescript
-const theme = defineKv(
-  type({ 
-    mode: "'light' | 'dark' | 'system'",
-    fontSize: 'number',
-    fontFamily: 'string'
-  })
-);
-```
-
-### KV with Nested Objects
+### Nested KV Objects
 
 ```typescript
 const preferences = defineKv(
@@ -214,39 +248,6 @@ const preferences = defineKv(
 );
 ```
 
-## Schema Transformations
-
-Use `.pipe()` to transform data during validation:
-
-```typescript
-// Transform empty strings to null
-const emptyToNull = type('string').pipe((s) => s === '' ? null : s);
-
-const posts = defineTable(
-  type({ 
-    id: 'string',
-    description: emptyToNull,
-    _v: '1'
-  })
-);
-
-// Parse dates
-const parseDateToIso = (dateStr: string) => {
-  const date = new Date(dateStr);
-  return isNaN(date.getTime()) ? null : date.toISOString();
-};
-
-const dateToIso = type('string').pipe(parseDateToIso);
-
-const events = defineTable(
-  type({ 
-    id: 'string',
-    date: dateToIso,
-    _v: '1'
-  })
-);
-```
-
 ## Common Patterns
 
 ### User Table
@@ -255,7 +256,7 @@ const events = defineTable(
 const users = defineTable(
   type({ 
     id: 'string',
-    email: 'email',
+    email: 'string',
     name: 'string',
     'avatar?': 'string',
     createdAt: 'number',
@@ -282,6 +283,21 @@ const posts = defineTable(
 );
 ```
 
+### Task Table with Status
+
+```typescript
+const tasks = defineTable(
+  type({ 
+    id: 'string',
+    title: 'string',
+    status: "'todo' | 'in_progress' | 'done'",
+    priority: "'low' | 'medium' | 'high'",
+    'dueDate?': 'number',
+    _v: '1'
+  })
+);
+```
+
 ### Settings KV
 
 ```typescript
@@ -295,13 +311,9 @@ const settings = defineKv(
 );
 ```
 
-## Schema Versioning
-
-The `_v` field enables schema versioning and migrations. Tables defined with arktype schemas automatically support multi-version rows through the version field.
-
 ## Type Inference
 
-Epicenter automatically infers TypeScript types from your schemas:
+TypeScript automatically infers types from your schemas:
 
 ```typescript
 const users = defineTable(
@@ -317,12 +329,22 @@ client.tables.users.set({
   id: '1',
   email: 'user@example.com',
   name: 'John Doe',
-  _v: 1
+  _v: 1  // Note: runtime value is number, not string
 });
 ```
+
+## Advanced arktype Features
+
+For more advanced validation, refer to the [arktype documentation](https://arktype.io):
+
+- Email validation: `'email'`
+- URL validation: `'string.url'`
+- Numeric constraints: `'number>=0'`, `'number>0'`
+- String parsing: `'string.numeric.parse'`
+- Custom constraints and transformations
 
 ## See Also
 
 - [arktype Documentation](https://arktype.io) - Full arktype reference
-- [Table Operations](/api/table-operations) - CRUD operations on tables
-- [Client Methods](/api/client-methods) - KV operations and client API
+- [defineTable Reference](/api/define-table) - Table definition API
+- [Table Operations](/api/table-operations) - CRUD operations

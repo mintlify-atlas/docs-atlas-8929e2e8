@@ -20,18 +20,18 @@ Use `defineWorkspace()` to create a reusable workspace definition:
 
 ```typescript
 import { defineWorkspace, defineTable } from '@epicenter/workspace';
-import { type } from 'typebox';
+import { type } from 'arktype';
 
 const posts = defineTable(
   type({
-    id: type.String(),
-    _v: type.Literal(1),
-    title: type.String(),
-    content: type.Optional(type.String()),
-    published: type.Boolean(),
-    createdAt: type.Number(),
+    id: 'string',
+    _v: '1',
+    title: 'string',
+    'content?': 'string',
+    published: 'boolean',
+    createdAt: 'number',
   })
-).version();
+);
 
 const blogWorkspace = defineWorkspace({
   id: 'blog',
@@ -69,20 +69,20 @@ Tables support schema evolution with migration functions:
 const posts = defineTable(
   // Version 1
   type({
-    id: type.String(),
-    _v: type.Literal(1),
-    title: type.String(),
-    published: type.Boolean(),
+    id: 'string',
+    _v: '1',
+    title: 'string',
+    published: 'boolean',
   })
 )
   .version(
     // Version 2 - added content field
     type({
-      id: type.String(),
-      _v: type.Literal(2),
-      title: type.String(),
-      content: type.String(),
-      published: type.Boolean(),
+      id: 'string',
+      _v: '2',
+      title: 'string',
+      content: 'string',
+      published: 'boolean',
     }),
     // Migration from v1 to v2
     (v1) => ({ ...v1, _v: 2, content: '' })
@@ -90,12 +90,12 @@ const posts = defineTable(
   .version(
     // Version 3 - added tags
     type({
-      id: type.String(),
-      _v: type.Literal(3),
-      title: type.String(),
-      content: type.String(),
-      tags: type.Array(type.String()),
-      published: type.Boolean(),
+      id: 'string',
+      _v: '3',
+      title: 'string',
+      content: 'string',
+      tags: 'string[]',
+      published: 'boolean',
     }),
     // Migration from v2 to v3
     (v2) => ({ ...v2, _v: 3, tags: [] })
@@ -124,9 +124,9 @@ const workspace = defineWorkspace({
   id: 'blog',
   tables: { posts },
   kv: {
-    theme: type.Union([type.Literal('light'), type.Literal('dark')]),
-    apiKey: type.String(),
-    lastSync: type.Number(),
+    theme: defineKv(type("'light' | 'dark'")),
+    apiKey: defineKv(type('string')),
+    lastSync: defineKv(type('number')),
   },
 });
 ```
@@ -149,11 +149,10 @@ Instantiate a workspace with extensions:
 ```typescript
 import { createWorkspace } from '@epicenter/workspace';
 import { setupPersistence } from '@epicenter/workspace/providers';
-import { sqliteProvider } from '@epicenter/workspace';
+// Note: sqliteProvider is a planned feature, not yet implemented
 
 const client = createWorkspace(blogWorkspace)
-  .withExtension('persistence', setupPersistence)
-  .withExtension('sqlite', (c) => sqliteProvider(c));
+  .withExtension('persistence', setupPersistence);
 
 // Use the client
 const id = generateId();
@@ -197,8 +196,7 @@ The workspace lifecycle has three phases:
 
 ```typescript
 const client = createWorkspace(definition)
-  .withExtension('persistence', setupPersistence)
-  .withExtension('sqlite', sqliteProvider);
+  .withExtension('persistence', setupPersistence);
 ```
 
 During creation:
@@ -264,7 +262,7 @@ import { authClient } from './auth-client';
 import { storageClient } from './storage-client';
 
 export const createPost = defineMutation({
-  input: type({ title: type.String(), authorId: type.String() }),
+  input: type({ title: 'string', authorId: 'string' }),
   handler: async ({ title, authorId }) => {
     // Access dependency workspace
     const user = await authClient.tables.users.get(authorId);

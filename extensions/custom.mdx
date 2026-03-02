@@ -380,8 +380,8 @@ const fullTextSearch: ExtensionFactory = ({ tables, extensions }) => {
 
 // Chain extensions
 const client = createWorkspace(definition)
-  .withExtension('sqlite', sqliteProvider)
-  .withExtension('fullTextSearch', fullTextSearch); // Can access sqlite!
+  .withExtension('persistence', setupPersistence)
+  .withExtension('fullTextSearch', fullTextSearch); // Can access persistence!
 ```
 
 ## TypeScript Tips

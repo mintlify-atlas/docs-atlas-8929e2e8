@@ -41,9 +41,14 @@ The persistence extension auto-saves on every change. No manual save operations 
 
 ### SQLite extension
 
-Enables SQL queries via Drizzle ORM:
+<Warning>
+  **PLANNED FEATURE** - The `sqliteProvider()` function is not yet implemented. See the [SQLite extension guide](/extensions/sqlite) for the planned API.
+</Warning>
+
+Enables SQL queries via Drizzle ORM (when implemented):
 
 ```typescript
+// NOTE: This is planned API, not yet available
 import { sqliteProvider } from '@epicenter/workspace';
 
 const client = createWorkspace(workspace)
@@ -56,13 +61,16 @@ const published = await client.extensions.sqlite.posts
   .orderBy(desc(client.extensions.sqlite.posts.views));
 ```
 
-See the [SQLite extension guide](/extensions/sqlite) for detailed usage.
-
 ### Markdown extension
 
-Persists data as human-readable markdown files:
+<Warning>
+  **PLANNED FEATURE** - The `markdownProvider()` function is not yet implemented. See the [Markdown extension guide](/extensions/markdown) for the planned API.
+</Warning>
+
+Persists data as human-readable markdown files (when implemented):
 
 ```typescript
+// NOTE: This is planned API, not yet available
 import { markdownProvider } from '@epicenter/workspace';
 
 const client = createWorkspace(workspace)
@@ -79,8 +87,6 @@ const client = createWorkspace(workspace)
     },
   }));
 ```
-
-See the [Markdown extension guide](/extensions/markdown) for configuration options.
 
 ### Sync extension
 
@@ -159,8 +165,7 @@ Extension factories run synchronously during client creation:
 ```typescript
 const client = createWorkspace(workspace)
   .withExtension('persistence', setupPersistence)  // Runs immediately
-  .withExtension('sqlite', sqliteProvider)         // Has access to persistence
-  .withExtension('sync', createSyncExtension(...)); // Has access to both
+  .withExtension('sync', createSyncExtension(...)); // Has access to persistence
 ```
 
 Each extension can access previously added extensions via the context.
@@ -258,8 +263,8 @@ const cacheExtension = ({ extensions }) => {
 };
 
 const client = createWorkspace(workspace)
-  .withExtension('sqlite', sqliteProvider)
-  .withExtension('cache', cacheExtension);  // Has access to sqlite
+  .withExtension('persistence', setupPersistence)
+  .withExtension('cache', cacheExtension);  // Has access to persistence
 ```
 
 <Tip>

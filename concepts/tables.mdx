@@ -35,19 +35,19 @@ Define tables with versioned schemas using Standard Schema (TypeBox, Zod, etc.):
 
 ```typescript
 import { defineTable } from '@epicenter/workspace';
-import { type } from 'typebox';
+import { type } from 'arktype';
 
 const posts = defineTable(
   type({
-    id: type.String(),
-    _v: type.Literal(1),
-    title: type.String(),
-    content: type.Optional(type.String()),
-    published: type.Boolean(),
-    views: type.Number(),
-    createdAt: type.Number(),
+    id: 'string',
+    _v: '1',
+    title: 'string',
+    content: 'string | null',
+    published: 'boolean',
+    views: 'number',
+    createdAt: 'number',
   })
-).version();
+);
 ```
 
 ### Required fields
@@ -56,8 +56,8 @@ Every table row must include:
 
 ```typescript
 {
-  id: type.String(),      // Unique identifier
-  _v: type.Literal(1),    // Schema version (literal type)
+  id: 'string',      // Unique identifier
+  _v: '1',           // Schema version (literal type)
   // ... your fields
 }
 ```
@@ -70,20 +70,20 @@ Add new schema versions with migration functions:
 const posts = defineTable(
   // Version 1
   type({
-    id: type.String(),
-    _v: type.Literal(1),
-    title: type.String(),
-    published: type.Boolean(),
+    id: 'string',
+    _v: '1',
+    title: 'string',
+    published: 'boolean',
   })
 )
   .version(
     // Version 2
     type({
-      id: type.String(),
-      _v: type.Literal(2),
-      title: type.String(),
-      tags: type.Array(type.String()),
-      published: type.Boolean(),
+      id: 'string',
+      _v: '2',
+      title: 'string',
+      tags: 'string[]',
+      published: 'boolean',
     }),
     // Migration v1 → v2
     (v1) => ({ ...v1, _v: 2, tags: [] })

@@ -19,11 +19,11 @@ Define actions **after** creating the workspace client:
 
 ```typescript
 import { createWorkspace, defineQuery, defineMutation } from '@epicenter/workspace';
-import { type } from 'typebox';
+import { type } from 'arktype';
 
 // Step 1: Create client
 const client = createWorkspace(workspace)
-  .withExtension('sqlite', sqliteProvider);
+  .withExtension('persistence', setupPersistence);
 
 // Step 2: Define actions that close over client
 export const actions = {
@@ -33,7 +33,7 @@ export const actions = {
     }),
     
     getById: defineQuery({
-      input: type({ id: type.String() }),
+      input: type({ id: 'string' }),
       handler: ({ id }) => {
         const result = client.tables.posts.get(id);
         if (result.status !== 'valid') {
@@ -45,8 +45,8 @@ export const actions = {
     
     create: defineMutation({
       input: type({
-        title: type.String(),
-        content: type.Optional(type.String()),
+        title: 'string',
+        'content?': 'string',
       }),
       handler: ({ title, content }) => {
         const id = generateId();
@@ -88,7 +88,7 @@ const posts = getAllPosts();  // Call with no arguments
 
 ```typescript
 const getPost = defineQuery({
-  input: type({ id: type.String() }),
+  input: type({ id: 'string' }),
   handler: ({ id }) => {
     const result = client.tables.posts.get(id);
     if (result.status === 'valid') {
@@ -148,8 +148,8 @@ publishAll();
 ```typescript
 const createPost = defineMutation({
   input: type({
-    title: type.String(),
-    content: type.Optional(type.String()),
+    title: 'string',
+    'content?': 'string',
   }),
   handler: ({ title, content }) => {
     const id = generateId();
@@ -192,17 +192,17 @@ Mutations map to HTTP POST when exposed via server.
 
 Actions support Standard Schema validation (TypeBox, Zod, Valibot, Effect):
 
-### TypeBox (recommended)
+### arktype (recommended)
 
 ```typescript
-import { type } from 'typebox';
+import { type } from 'arktype';
 
 const createPost = defineMutation({
   input: type({
-    title: type.String({ minLength: 1, maxLength: 200 }),
-    content: type.String(),
-    tags: type.Array(type.String()),
-    published: type.Boolean(),
+    title: 'string>=1<=200',
+    content: 'string',
+    tags: 'string[]',
+    published: 'boolean',
   }),
   handler: (input) => {
     // input is fully typed
@@ -242,7 +242,7 @@ Actions use JavaScript closures to capture dependencies:
 ```typescript
 // Client created first
 const client = createWorkspace(workspace)
-  .withExtension('sqlite', sqliteProvider);
+  .withExtension('persistence', setupPersistence);
 
 // Actions capture client via closure
 const actions = {
@@ -276,10 +276,10 @@ Group related actions into namespaces:
 export const actions = {
   posts: {
     getAll: defineQuery({ handler: () => client.tables.posts.getAllValid() }),
-    getById: defineQuery({ input: type({ id: type.String() }), handler: ... }),
+    getById: defineQuery({ input: type({ id: 'string' }), handler: ... }),
     create: defineMutation({ input: type({ ... }), handler: ... }),
     update: defineMutation({ input: type({ ... }), handler: ... }),
-    delete: defineMutation({ input: type({ id: type.String() }), handler: ... }),
+    delete: defineMutation({ input: type({ id: 'string' }), handler: ... }),
   },
   users: {
     getProfile: defineQuery({ handler: ... }),
@@ -300,13 +300,13 @@ Actions have metadata properties for introspection:
 ```typescript
 const getPost = defineQuery({
   description: 'Get a post by ID',
-  input: type({ id: type.String() }),
+  input: type({ id: 'string' }),
   handler: ({ id }) => client.tables.posts.get(id),
 });
 
 console.log(getPost.type);         // 'query'
 console.log(getPost.description);  // 'Get a post by ID'
-console.log(getPost.input);        // TypeBox schema
+console.log(getPost.input);        // arktype schema
 ```
 
 Metadata is used by:
@@ -344,7 +344,7 @@ const getStats = defineQuery({
 
 ```typescript
 const getPost = defineQuery({
-  input: type({ id: type.String() }),
+  input: type({ id: 'string' }),
   handler: ({ id }) => {
     const result = client.tables.posts.get(id);
     if (result.status !== 'valid') {
@@ -366,25 +366,22 @@ Actions can access extension exports via closure:
 
 ```typescript
 const client = createWorkspace(workspace)
-  .withExtension('sqlite', sqliteProvider)
-  .withExtension('markdown', markdownProvider);
+  .withExtension('persistence', setupPersistence)
+  .withExtension('sync', createSyncExtension({ url: 'ws://localhost:3913/rooms/{id}' }));
 
 const actions = {
-  // Access SQLite extension
-  getPublishedPosts: defineQuery({
+  // Access persistence extension
+  waitForSync: defineQuery({
     handler: async () => {
-      const { posts } = client.extensions.sqlite;
-      return await posts
-        .select()
-        .where(eq(posts.published, true));
+      await client.extensions.persistence.whenReady;
+      return { success: true };
     },
   }),
   
-  // Access markdown extension
-  exportToMarkdown: defineMutation({
-    handler: async () => {
-      await client.extensions.markdown.pullToMarkdown();
-      return { success: true };
+  // Get all valid posts
+  getAllPosts: defineQuery({
+    handler: () => {
+      return client.tables.posts.getAllValid();
     },
   }),
 };
