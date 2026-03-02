@@ -1,0 +1,143 @@
+{
+  "projectType": "framework",
+  "projectName": "Epicenter",
+  "projectDescription": "Open-source, local-first workspace platform built on YJS CRDTs for real-time collaboration with SQLite and markdown persistence.",
+  "theme": "palm",
+  "primaryColor": "#FF6B35",
+  "lightColor": "#FFA07A",
+  "darkColor": "#E64A19",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "installation"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/architecture",
+              "concepts/workspaces",
+              "concepts/tables",
+              "concepts/extensions",
+              "concepts/actions"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/defining-workspaces",
+              "guides/table-operations",
+              "guides/sqlite-queries",
+              "guides/markdown-persistence",
+              "guides/multi-device-sync",
+              "guides/error-handling"
+            ]
+          },
+          {
+            "group": "Extensions",
+            "pages": [
+              "extensions/overview",
+              "extensions/sqlite",
+              "extensions/markdown",
+              "extensions/sync",
+              "extensions/custom"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Client",
+            "pages": [
+              "api/create-client",
+              "api/client-methods"
+            ]
+          },
+          {
+            "group": "Workspace",
+            "pages": [
+              "api/define-workspace",
+              "api/column-types",
+              "api/table-operations"
+            ]
+          },
+          {
+            "group": "Actions",
+            "pages": [
+              "api/define-query",
+              "api/define-mutation",
+              "api/action-types"
+            ]
+          },
+          {
+            "group": "Extensions",
+            "pages": [
+              "api/sqlite-provider",
+              "api/markdown-provider",
+              "api/sync-extension",
+              "api/persistence"
+            ]
+          },
+          {
+            "group": "Utilities",
+            "pages": [
+              "api/date-utilities",
+              "api/validation",
+              "api/errors"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Apps",
+        "groups": [
+          {
+            "group": "Whispering",
+            "pages": [
+              "apps/whispering/overview",
+              "apps/whispering/installation",
+              "apps/whispering/setup",
+              "apps/whispering/features",
+              "apps/whispering/contributing"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "YJS CRDT-based workspace system for conflict-free collaboration",
+    "SQLite provider for SQL queries via Drizzle ORM",
+    "Markdown provider for human-readable file persistence",
+    "Real-time multi-device sync with y-websocket protocol",
+    "Type-safe actions with Standard Schema validation",
+    "Local-first architecture with optional cloud sync",
+    "Extensible provider system for custom capabilities",
+    "Built-in undo/redo and offline support"
+  ],
+  "publicApiSurface": [
+    "defineWorkspace({ id, tables, kv })",
+    "createClient(workspaceId).withDefinition().withExtension()",
+    "defineQuery({ input, handler })",
+    "defineMutation({ input, handler })",
+    "sqliteProvider(context)",
+    "markdownProvider(context, config)",
+    "createSyncExtension({ url })",
+    "tables.get(tableName).upsert(row)",
+    "tables.get(tableName).get({ id })",
+    "tables.get(tableName).delete({ id })",
+    "tables.get(tableName).observe(callback)",
+    "Column types: id(), text(), ytext(), integer(), real(), boolean(), date(), select(), tags(), json()",
+    "DateTimeString.now(timezone)",
+    "client.destroy()"
+  ]
+}
