@@ -1,0 +1,436 @@
+---
+title: Multi-Device Sync
+description: WebSocket sync architecture for distributed collaboration across devices
+---
+
+Epicenter supports real-time multi-device synchronization using the y-websocket protocol. Your YJS documents automatically sync across phones, laptops, desktops, and cloud servers with conflict-free CRDT merging.
+
+## How It Works
+
+Epicenter's sync architecture:
+
+1. **Uses y-websocket protocol** (standard, compatible with any YJS client)
+2. **Connects to multiple nodes** simultaneously (phone → laptop + desktop + cloud)
+3. **Server-to-server sync** between Epicenter servers
+4. **CRDTs ensure** eventual consistency automatically
+5. **Tracks local changes** with `hasLocalChanges` heartbeat extension
+
+<Note>
+  YJS CRDTs handle conflicts automatically. Multiple devices can edit simultaneously without coordination.
+</Note>
+
+## Setup
+
+Add the sync extension when creating your workspace client:
+
+```typescript
+import { createWorkspace } from '@epicenter/workspace';
+import { createSyncExtension } from '@epicenter/workspace/extensions/sync';
+import { blogWorkspace } from './workspace';
+
+const client = createWorkspace(blogWorkspace)
+  .withExtension(
+    'sync',
+    createSyncExtension({
+      url: 'ws://localhost:3913/rooms/{id}',
+    })
+  );
+
+// The {id} placeholder is replaced with the workspace ID automatically
+```
+
+## Extension Exports
+
+The sync extension provides:
+
+```typescript
+client.extensions.sync = {
+  // Connection status
+  status: 'connecting' | 'connected' | 'disconnected',
+  
+  // Change tracking
+  hasLocalChanges: boolean,
+  
+  // Manual control (rarely needed)
+  connect: () => void,
+  disconnect: () => void,
+  destroy: () => void,
+}
+```
+
+## Server Setup
+
+The Epicenter server includes a built-in sync endpoint:
+
+```typescript
+import { createWorkspace } from '@epicenter/workspace';
+import { createServer } from '@epicenter/server';
+import { blogWorkspace } from './workspace';
+
+const client = createWorkspace(blogWorkspace);
+
+const server = createServer(client, {
+  port: 3913,
+});
+
+server.start();
+
+// Clients connect to: ws://localhost:3913/rooms/blog
+```
+
+<Tip>
+  The sync endpoint is automatically available at `/rooms/{workspaceId}` for all workspaces.
+</Tip>
+
+## Multi-Device Topologies
+
+### Centralized Cloud
+
+All devices connect to a single cloud server:
+
+```
+┌─────────┐        ┌─────────┐        ┌─────────┐
+│ Phone   │───────►│ Cloud   │◄───────│ Laptop  │
+│ Browser │        │ Server  │        │ Browser │
+└─────────┘        └─────────┘        └─────────┘
+```
+
+```typescript
+// Cloud server
+const server = createServer(client, { port: 3913 });
+server.start();
+
+// Phone client
+const phoneClient = createWorkspace(workspace)
+  .withExtension('sync', createSyncExtension({
+    url: 'wss://sync.myapp.com/rooms/{id}',
+  }));
+
+// Laptop client
+const laptopClient = createWorkspace(workspace)
+  .withExtension('sync', createSyncExtension({
+    url: 'wss://sync.myapp.com/rooms/{id}',
+  }));
+```
+
+### Peer-to-Peer via Tailscale
+
+Devices connect directly over a Tailscale network:
+
+```
+┌─────────┐        ┌─────────┐        ┌─────────┐
+│ Phone   │───────►│ Desktop │◄───────│ Laptop  │
+│ Browser │        │ Server  │        │ Server  │
+└─────────┘        └────┬────┘        └────┬────┘
+                        │                   │
+                        └───────────────────┘
+                         server-to-server
+```
+
+```typescript
+// Define sync nodes
+export const SYNC_NODES = {
+  desktop: 'ws://desktop.my-tailnet.ts.net:3913/rooms/{id}',
+  laptop: 'ws://laptop.my-tailnet.ts.net:3913/rooms/{id}',
+  cloud: 'wss://sync.myapp.com/rooms/{id}',
+} as const;
+
+// Phone: Connect to all nodes
+const phoneClient = createWorkspace(workspace)
+  .withExtension('syncDesktop', createSyncExtension({ url: SYNC_NODES.desktop }))
+  .withExtension('syncLaptop', createSyncExtension({ url: SYNC_NODES.laptop }))
+  .withExtension('syncCloud', createSyncExtension({ url: SYNC_NODES.cloud }));
+
+// Desktop server: Sync with laptop + cloud
+const desktopClient = createWorkspace(workspace)
+  .withExtension('syncLaptop', createSyncExtension({ url: SYNC_NODES.laptop }))
+  .withExtension('syncCloud', createSyncExtension({ url: SYNC_NODES.cloud }));
+
+const desktopServer = createServer(desktopClient, { port: 3913 });
+desktopServer.start();
+```
+
+### Hybrid: Local + Cloud
+
+Devices prefer local servers, fall back to cloud:
+
+```typescript
+const client = createWorkspace(workspace)
+  .withExtension('syncLocal', createSyncExtension({
+    url: 'ws://localhost:3913/rooms/{id}',
+    // Reconnect disabled for local (fail fast)
+  }))
+  .withExtension('syncCloud', createSyncExtension({
+    url: 'wss://sync.myapp.com/rooms/{id}',
+    // Always-on cloud backup
+  }));
+```
+
+## Multi-Node Example
+
+Here's a complete setup for a distributed sync architecture:
+
+<Steps>
+  <Step title="Define sync nodes">
+    ```typescript
+    // src/config/sync-nodes.ts
+    export const SYNC_NODES = {
+      // Local devices via Tailscale
+      desktop: 'ws://desktop.my-tailnet.ts.net:3913/rooms/{id}',
+      laptop: 'ws://laptop.my-tailnet.ts.net:3913/rooms/{id}',
+      
+      // Cloud server (always-on)
+      cloud: 'wss://sync.myapp.com/rooms/{id}',
+      
+      // Localhost (for browser connecting to local server)
+      localhost: 'ws://localhost:3913/rooms/{id}',
+    } as const;
+    ```
+  </Step>
+
+  <Step title="Configure per-device clients">
+    ```typescript
+    // Phone browser: Client only, connects to all nodes
+    const phoneClient = createWorkspace(workspace)
+      .withExtension('syncDesktop', createSyncExtension({ url: SYNC_NODES.desktop }))
+      .withExtension('syncLaptop', createSyncExtension({ url: SYNC_NODES.laptop }))
+      .withExtension('syncCloud', createSyncExtension({ url: SYNC_NODES.cloud }));
+    
+    // Desktop server: Node + client, syncs with other servers
+    const desktopClient = createWorkspace(workspace)
+      .withExtension('syncLaptop', createSyncExtension({ url: SYNC_NODES.laptop }))
+      .withExtension('syncCloud', createSyncExtension({ url: SYNC_NODES.cloud }));
+    
+    const desktopServer = createServer(desktopClient, { port: 3913 });
+    desktopServer.start();
+    
+    // Desktop browser: Client connecting to local server
+    const desktopBrowserClient = createWorkspace(workspace)
+      .withExtension('sync', createSyncExtension({ url: SYNC_NODES.localhost }));
+    ```
+  </Step>
+
+  <Step title="Deploy cloud server">
+    ```typescript
+    // Cloud production server
+    const cloudClient = createWorkspace(workspace);
+    
+    const cloudServer = createServer(cloudClient, {
+      port: 3913,
+      host: '0.0.0.0',
+    });
+    
+    cloudServer.start();
+    
+    // No outbound sync extensions needed (receives connections only)
+    ```
+  </Step>
+</Steps>
+
+## Sync Roles by Device
+
+| Device          | Role          | Connects To                  | Accepts Connections |
+| --------------- | ------------- | ---------------------------- | ------------------- |
+| Phone browser   | Client only   | `desktop`, `laptop`, `cloud` | No                  |
+| Laptop browser  | Client        | `localhost`                  | No                  |
+| Desktop browser | Client        | `localhost`                  | No                  |
+| Laptop server   | Node + Client | `desktop`, `cloud`           | Yes (port 3913)     |
+| Desktop server  | Node + Client | `laptop`, `cloud`            | Yes (port 3913)     |
+| Cloud server    | Node only     | None                         | Yes (port 3913)     |
+
+<Warning>
+  Never connect a server to itself! Desktop server should not include `SYNC_NODES.desktop` in its extensions.
+</Warning>
+
+## Connection Status
+
+Monitor sync status for UI feedback:
+
+```typescript
+const { sync } = client.extensions;
+
+// Check connection status
+console.log(sync.status); // 'connecting' | 'connected' | 'disconnected'
+
+// Check for unsaved changes
+if (sync.hasLocalChanges) {
+  console.warn('You have unsaved changes that haven\'t synced yet');
+}
+
+// React UI example
+function SyncStatus() {
+  const [status, setStatus] = useState(client.extensions.sync.status);
+  const [hasChanges, setHasChanges] = useState(client.extensions.sync.hasLocalChanges);
+  
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setStatus(client.extensions.sync.status);
+      setHasChanges(client.extensions.sync.hasLocalChanges);
+    }, 1000);
+    
+    return () => clearInterval(interval);
+  }, []);
+  
+  return (
+    <div>
+      <div>Status: {status}</div>
+      {hasChanges && <div>⚠️ Unsaved changes</div>}
+    </div>
+  );
+}
+```
+
+## Authentication
+
+The sync extension supports three auth modes:
+
+<CodeGroup>
+```typescript Open (No Auth)
+const client = createWorkspace(workspace)
+  .withExtension('sync', createSyncExtension({
+    url: 'ws://localhost:3913/rooms/{id}',
+    // No auth required
+  }));
+```
+
+```typescript Static Token
+const client = createWorkspace(workspace)
+  .withExtension('sync', createSyncExtension({
+    url: 'ws://localhost:3913/rooms/{id}',
+    auth: {
+      type: 'static',
+      token: 'my-secret-token',
+    },
+  }));
+```
+
+```typescript Dynamic Token Refresh
+const client = createWorkspace(workspace)
+  .withExtension('sync', createSyncExtension({
+    url: 'ws://localhost:3913/rooms/{id}',
+    auth: {
+      type: 'dynamic',
+      getToken: async () => {
+        const response = await fetch('/api/auth/token');
+        const { token } = await response.json();
+        return token;
+      },
+    },
+  }));
+```
+</CodeGroup>
+
+## Awareness (User Presence)
+
+YJS Awareness is built-in and works automatically:
+
+```typescript
+import * as awarenessProtocol from 'y-protocols/awareness';
+
+const awareness = client.extensions.sync.provider.awareness;
+
+// Set local user state
+awareness.setLocalStateField('user', {
+  name: 'Alice',
+  color: '#ff0000',
+  cursor: { x: 100, y: 200 },
+});
+
+// Observe remote users
+awareness.on('change', (changes) => {
+  const states = awareness.getStates();
+  
+  for (const [clientId, state] of states) {
+    if (clientId !== awareness.clientID) {
+      console.log('Remote user:', state.user);
+      renderCursor(state.user.cursor, state.user.color);
+    }
+  }
+});
+```
+
+## Offline Support
+
+Clients work offline and sync when reconnected:
+
+```typescript
+// Works offline
+client.tables.posts.set({
+  id: '1',
+  title: 'Offline Post',
+  content: 'Written on the plane',
+  _v: 1,
+});
+
+// Data is stored in IndexedDB (browser) or filesystem (Node.js)
+// Automatically syncs when connection is restored
+```
+
+<Tip>
+  Combine with the persistence extension for guaranteed offline storage:
+  
+  ```typescript
+  .withExtension('persistence', indexeddbPersistence)
+  .withExtension('sync', createSyncExtension({ url: 'ws://...' }))
+  ```
+</Tip>
+
+## Production Example
+
+Here's a complete production setup with persistence + sync:
+
+```typescript
+import { createWorkspace } from '@epicenter/workspace';
+import { indexeddbPersistence } from '@epicenter/workspace/extensions/sync/web';
+import { createSyncExtension } from '@epicenter/workspace/extensions/sync';
+import { blogWorkspace } from './workspace';
+import { SYNC_NODES } from './config/sync-nodes';
+
+const client = createWorkspace(blogWorkspace)
+  // Persistence FIRST (loads from IndexedDB before sync)
+  .withExtension('persistence', indexeddbPersistence)
+  
+  // Sync with multiple nodes
+  .withExtension('syncDesktop', createSyncExtension({
+    url: SYNC_NODES.desktop,
+  }))
+  .withExtension('syncLaptop', createSyncExtension({
+    url: SYNC_NODES.laptop,
+  }))
+  .withExtension('syncCloud', createSyncExtension({
+    url: SYNC_NODES.cloud,
+    auth: {
+      type: 'dynamic',
+      getToken: async () => {
+        const { token } = await fetch('/api/auth/token').then(r => r.json());
+        return token;
+      },
+    },
+  }));
+
+// Wait for persistence to load
+await client.whenReady;
+
+// Now safe to read/write
+const posts = client.tables.posts.getAllValid();
+console.log(`Loaded ${posts.length} posts from persistence`);
+
+// Auto-syncs with all connected nodes
+client.tables.posts.set({
+  id: Date.now().toString(),
+  title: 'New Post',
+  content: 'Syncs to all devices',
+  _v: 1,
+});
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Error Handling" icon="triangle-exclamation" href="/guides/error-handling">
+    Handle sync errors and Result types
+  </Card>
+  <Card title="Table Operations" icon="table" href="/guides/table-operations">
+    Learn reactive observation patterns
+  </Card>
+</CardGroup>

@@ -1,0 +1,195 @@
+---
+title: Validation
+description: Table and workspace validation using arktype schemas
+---
+
+## Overview
+
+Epicenter uses [arktype](https://arktype.io/) for runtime validation through the Standard Schema v1 interface. All table schemas and key-value stores are validated using arktype's type-safe schema definitions.
+
+## Table Validation
+
+Tables are validated automatically when rows are read, written, or updated. The validation happens in `createTableHelper`, which wraps table operations with schema validation and migration.
+
+### Schema Requirements
+
+All table schemas must include:
+- `id: string` - Unique row identifier
+- `_v: number` - Version discriminant for migrations
+
+### Single Version Tables
+
+For tables with a single schema version, pass the schema directly to `defineTable`:
+
+```typescript
+import { defineTable } from '@epicenter/workspace';
+import { type } from 'arktype';
+
+const users = defineTable(
+  type({ id: 'string', email: 'string', _v: '1' })
+);
+```
+
+### Multi-Version Tables
+
+For tables that evolve over time, use the builder pattern with migrations:
+
+```typescript
+const posts = defineTable()
+  .version(type({ id: 'string', title: 'string', _v: '1' }))
+  .version(type({ id: 'string', title: 'string', views: 'number', _v: '2' }))
+  .migrate((row) => {
+    switch (row._v) {
+      case 1: return { ...row, views: 0, _v: 2 };
+      case 2: return row;
+    }
+  });
+```
+
+### Validation on Read
+
+When you read rows from a table, they are automatically validated and migrated to the latest version:
+
+```typescript
+// Get a single row
+const result = tables.users.get('user-123');
+
+if (result.status === 'valid') {
+  console.log(result.row.email);  // Typed and validated
+} else if (result.status === 'invalid') {
+  console.error(result.errors);  // Validation issues
+} else {
+  console.log('Not found');
+}
+```
+
+### Validation Results
+
+Validation returns one of three result types:
+
+```typescript
+type RowResult<TRow> = 
+  | { status: 'valid', row: TRow }
+  | { status: 'invalid', id: string, errors: unknown[], row: unknown }
+  | { status: 'not_found', id: string, row: undefined };
+```
+
+### Handling Invalid Rows
+
+You can query for all invalid rows to identify data quality issues:
+
+```typescript
+const invalid = tables.users.getAllInvalid();
+
+for (const result of invalid) {
+  console.log(`Row ${result.id} failed validation:`, result.errors);
+}
+```
+
+## TableHelper API
+
+The `createTableHelper` function in `~/workspace/source/packages/epicenter/src/workspace/table-helper.ts:27` creates a validated table interface with these methods:
+
+### Write Operations
+
+```typescript
+// Set a row (validates before writing)
+tables.users.set({ id: 'user-123', email: 'user@example.com', _v: 1 });
+
+// Update a row (validates merged result)
+tables.users.update('user-123', { email: 'newemail@example.com' });
+```
+
+### Read Operations
+
+```typescript
+// Get single row with validation
+const result = tables.users.get('user-123');
+
+// Get all rows (includes valid and invalid)
+const allResults = tables.users.getAll();
+
+// Get only valid rows
+const validRows = tables.users.getAllValid();
+
+// Get only invalid rows
+const invalidRows = tables.users.getAllInvalid();
+```
+
+### Query Operations
+
+```typescript
+// Filter valid rows
+const activeUsers = tables.users.filter(user => user.active);
+
+// Find first matching valid row
+const admin = tables.users.find(user => user.role === 'admin');
+```
+
+### Delete Operations
+
+```typescript
+// Delete single row
+tables.users.delete('user-123');
+
+// Clear all rows
+tables.users.clear();
+```
+
+### Observation
+
+```typescript
+// Observe changes to the table
+const unsubscribe = tables.users.observe((changedIds, transaction) => {
+  console.log('Changed rows:', Array.from(changedIds));
+});
+
+// Later: stop observing
+unsubscribe();
+```
+
+## Standard Schema Integration
+
+Epicenter uses the [Standard Schema v1](https://github.com/standard-schema/standard-schema) interface, which means you can use any compliant validation library:
+
+- **arktype** (default, used in Epicenter)
+- **Zod**
+- **Valibot**
+- **TypeBox**
+
+The validation happens through the `~standard` property:
+
+```typescript
+const result = definition.schema['~standard'].validate(row);
+```
+
+## Planned Features
+
+<Note>
+The following validation utilities are planned but not yet implemented:
+</Note>
+
+### createTableValidators
+
+A utility to generate validators for all tables in a workspace:
+
+```typescript
+// Planned API
+const validators = createTableValidators(workspaceDefinition);
+
+const isValid = validators.users.validate(unknownData);
+```
+
+### createWorkspaceValidators
+
+A utility to generate validators for the entire workspace, including key-value stores:
+
+```typescript
+// Planned API
+const validators = createWorkspaceValidators(workspaceDefinition);
+
+const tablesValid = validators.tables.users.validate(userData);
+const kvValid = validators.kv.settings.validate(settingsData);
+```
+
+These utilities would provide standalone validation without requiring a live workspace instance.

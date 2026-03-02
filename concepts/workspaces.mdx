@@ -1,0 +1,324 @@
+---
+title: "Workspaces"
+description: "Workspace definition, schema, and lifecycle in Epicenter"
+icon: "box"
+---
+
+## What is a workspace?
+
+A workspace is a self-contained data module with:
+
+- **Tables** - Structured data collections with versioned schemas
+- **KV Store** - Simple key-value store for settings and metadata
+- **Extensions** - Capabilities like persistence, sync, and query layers
+
+Workspaces are defined once and can be instantiated multiple times with different extensions.
+
+## Defining a workspace
+
+Use `defineWorkspace()` to create a reusable workspace definition:
+
+```typescript
+import { defineWorkspace, defineTable } from '@epicenter/workspace';
+import { type } from 'typebox';
+
+const posts = defineTable(
+  type({
+    id: type.String(),
+    _v: type.Literal(1),
+    title: type.String(),
+    content: type.Optional(type.String()),
+    published: type.Boolean(),
+    createdAt: type.Number(),
+  })
+).version();
+
+const blogWorkspace = defineWorkspace({
+  id: 'blog',
+  tables: { posts },
+  kv: {},
+});
+```
+
+### Workspace ID convention
+
+Epicenter uses stable, shared workspace IDs so multiple apps can collaborate on the same data:
+
+- **Format**: `epicenter.<app>` (for example, `epicenter.whispering`)
+- **Purpose**: Ensures the same workspace is discovered, synced, and shared across apps
+- **Stability**: IDs must be globally unique and never change once published
+- **Usage**: The workspace ID is used for routing, persistence paths, Y.Doc IDs, and sharing
+
+<Warning>
+When two apps declare the same workspace ID, they intentionally point to the same shared workspace and data.
+</Warning>
+
+## Table definitions
+
+Tables are the primary way to store structured data in Epicenter. Each table has:
+
+- **Versioned schema** - Multiple schema versions with migration paths
+- **Validation** - Runtime type checking using Standard Schema (TypeBox, Zod, etc.)
+- **Documents** - Optional Y.Doc attachments for rich content
+
+### Versioned schemas
+
+Tables support schema evolution with migration functions:
+
+```typescript
+const posts = defineTable(
+  // Version 1
+  type({
+    id: type.String(),
+    _v: type.Literal(1),
+    title: type.String(),
+    published: type.Boolean(),
+  })
+)
+  .version(
+    // Version 2 - added content field
+    type({
+      id: type.String(),
+      _v: type.Literal(2),
+      title: type.String(),
+      content: type.String(),
+      published: type.Boolean(),
+    }),
+    // Migration from v1 to v2
+    (v1) => ({ ...v1, _v: 2, content: '' })
+  )
+  .version(
+    // Version 3 - added tags
+    type({
+      id: type.String(),
+      _v: type.Literal(3),
+      title: type.String(),
+      content: type.String(),
+      tags: type.Array(type.String()),
+      published: type.Boolean(),
+    }),
+    // Migration from v2 to v3
+    (v2) => ({ ...v2, _v: 3, tags: [] })
+  );
+```
+
+<Info>
+Migrations run automatically when reading data. Old versions are migrated to the latest schema on-the-fly.
+</Info>
+
+### Required fields
+
+Every table row must have:
+
+- `id: string` - Unique identifier for the row
+- `_v: number` - Schema version number (literal type)
+
+These fields enable row lookup and schema migration.
+
+## Key-value store
+
+The KV store provides simple key-value storage for workspace settings:
+
+```typescript
+const workspace = defineWorkspace({
+  id: 'blog',
+  tables: { posts },
+  kv: {
+    theme: type.Union([type.Literal('light'), type.Literal('dark')]),
+    apiKey: type.String(),
+    lastSync: type.Number(),
+  },
+});
+```
+
+Access KV values via the client:
+
+```typescript
+const theme = client.kv.theme.get();
+if (theme.status === 'valid') {
+  console.log('Current theme:', theme.value);
+}
+
+client.kv.theme.set('dark');
+```
+
+## Creating a workspace client
+
+Instantiate a workspace with extensions:
+
+```typescript
+import { createWorkspace } from '@epicenter/workspace';
+import { setupPersistence } from '@epicenter/workspace/providers';
+import { sqliteProvider } from '@epicenter/workspace';
+
+const client = createWorkspace(blogWorkspace)
+  .withExtension('persistence', setupPersistence)
+  .withExtension('sqlite', (c) => sqliteProvider(c));
+
+// Use the client
+const id = generateId();
+client.tables.posts.set({
+  id,
+  _v: 3,
+  title: 'Hello World',
+  content: 'First post',
+  tags: ['intro'],
+  published: false,
+});
+
+// Cleanup when done
+await client.destroy();
+```
+
+### Automatic cleanup with `await using`
+
+Use `await using` for automatic resource cleanup:
+
+```typescript
+{
+  await using client = createWorkspace(blogWorkspace)
+    .withExtension('persistence', setupPersistence);
+
+  client.tables.posts.set({ id: '1', _v: 3, title: 'Hello' });
+  
+  // Automatic cleanup when block exits
+}
+```
+
+<Tip>
+Use `await using` in scripts and migrations for guaranteed cleanup, even if errors occur.
+</Tip>
+
+## Workspace lifecycle
+
+The workspace lifecycle has three phases:
+
+### 1. Creation
+
+```typescript
+const client = createWorkspace(definition)
+  .withExtension('persistence', setupPersistence)
+  .withExtension('sqlite', sqliteProvider);
+```
+
+During creation:
+- Y.Doc is initialized with the workspace ID as GUID
+- Tables are created as Y.Array-backed stores
+- Extensions run in parallel
+- Extensions can access previously added extensions (typed)
+
+### 2. Usage
+
+```typescript
+// Wait for extensions to initialize
+await client.whenReady;
+
+// Use tables
+client.tables.posts.set({ id: '1', ... });
+const post = client.tables.posts.get('1');
+
+// Use extensions
+const published = await client.extensions.sqlite.posts
+  .select()
+  .where(eq(client.extensions.sqlite.posts.published, true));
+```
+
+### 3. Cleanup
+
+```typescript
+await client.destroy();
+```
+
+During cleanup:
+- Extensions are destroyed in LIFO order (last registered = first destroyed)
+- Observers are unsubscribed
+- Connections are closed
+- Y.Doc is destroyed
+
+<Warning>
+Always call `destroy()` or use `await using` to prevent resource leaks.
+</Warning>
+
+## Client properties
+
+The workspace client provides:
+
+```typescript
+client.id           // Workspace ID
+client.ydoc         // Raw Y.Doc instance
+client.tables       // Table helpers (typed)
+client.kv           // KV store helpers (typed)
+client.awareness    // Awareness for presence tracking
+client.extensions   // Extension exports (typed)
+client.batch(fn)    // Run fn in a Y.Doc transaction
+client.whenReady    // Promise that resolves when extensions are ready
+client.destroy()    // Cleanup resources
+```
+
+## Workspace dependencies
+
+Workspaces can depend on other workspaces for cross-workspace communication:
+
+```typescript
+import { authClient } from './auth-client';
+import { storageClient } from './storage-client';
+
+export const createPost = defineMutation({
+  input: type({ title: type.String(), authorId: type.String() }),
+  handler: async ({ title, authorId }) => {
+    // Access dependency workspace
+    const user = await authClient.tables.users.get(authorId);
+    if (user.status !== 'valid') {
+      return { error: 'User not found' };
+    }
+
+    // Create post in local workspace
+    const id = generateId();
+    blogClient.tables.posts.set({
+      id,
+      _v: 3,
+      title,
+      authorId,
+      published: false,
+    });
+    return { id };
+  },
+});
+```
+
+<Note>
+Workspace dependencies are just regular imports—no special configuration needed.
+</Note>
+
+## Storage isolation
+
+Each workspace stores data in isolated directories:
+
+```
+.epicenter/providers/
+├── persistence/
+│   ├── blog.yjs        # Blog workspace Y.Doc
+│   └── auth.yjs        # Auth workspace Y.Doc
+├── sqlite/
+│   ├── blog.db         # Blog workspace database
+│   └── auth.db         # Auth workspace database
+```
+
+Workspaces cannot access each other's data directly—use workspace dependencies for cross-workspace access.
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Tables" icon="table" href="/concepts/tables">
+    Learn about table operations and validation
+  </Card>
+  <Card title="Extensions" icon="puzzle-piece" href="/concepts/extensions">
+    Add capabilities with extensions
+  </Card>
+  <Card title="Actions" icon="bolt" href="/concepts/actions">
+    Define queries and mutations
+  </Card>
+  <Card title="Architecture" icon="diagram-project" href="/concepts/architecture">
+    Understand the overall architecture
+  </Card>
+</CardGroup>

@@ -1,0 +1,242 @@
+---
+title: Extensions Overview
+description: Understand how extensions add capabilities to Epicenter workspaces
+---
+
+## What are Extensions?
+
+Extensions add optional capabilities to Epicenter workspaces. They're modular add-ons that enhance your workspace with features like persistence, SQL queries, file-based storage, and real-time sync.
+
+### Extension Philosophy
+
+Epicenter uses a **YJS Document as the source of truth** for all data. Extensions are optional layers that:
+
+- **Mirror YJS data** for specific use cases (SQL queries, markdown files)
+- **Auto-sync bidirectionally** with the YJS document
+- **Run in parallel** during workspace initialization
+- **Are completely optional** — you can use just YJS, or combine multiple extensions
+
+```
+┌────────────────────────────────────────────────────────┐
+│  WRITE FLOW                                            │
+│                                                        │
+│  Action Called → Y.Doc Updated → Auto-sync to Providers│
+│                       │                                │
+│              ┌────────┼────────┐                       │
+│              ▼        ▼        ▼                       │
+│         IndexedDB  SQLite   Markdown                   │
+│         (or .yjs)   (.db)   (files)                    │
+└────────────────────────────────────────────────────────┘
+
+┌────────────────────────────────────────────────────────┐
+│  READ FLOW                                             │
+│                                                        │
+│  Query Called → Read from Provider (SQLite for complex)│
+│                 or directly from Y.Doc (simple lookups)│
+└────────────────────────────────────────────────────────┘
+```
+
+## Core Extensions
+
+<CardGroup cols={2}>
+  <Card title="Persistence" icon="floppy-disk" href="/extensions/persistence">
+    Save YJS state to IndexedDB (browser) or filesystem (Node.js)
+  </Card>
+  <Card title="SQLite" icon="database" href="/extensions/sqlite">
+    Query data with SQL using Drizzle ORM
+  </Card>
+  <Card title="Markdown" icon="file-lines" href="/extensions/markdown">
+    Persist data as human-readable markdown files
+  </Card>
+  <Card title="Sync" icon="arrows-rotate" href="/extensions/sync">
+    Real-time multi-device sync via WebSocket
+  </Card>
+</CardGroup>
+
+## Extension Context
+
+Every extension factory receives a context object with access to the workspace:
+
+```typescript
+type ExtensionContext = {
+  id: string;                    // Workspace ID
+  ydoc: Y.Doc;                   // YJS document
+  definitions: {                 // Workspace schemas
+    tables: TableDefinitions;
+    kv: KvDefinitions;
+    awareness: AwarenessDefinitions;
+  };
+  tables: TablesHelper;          // Table operations
+  kv: KvHelper;                  // Key-value operations  
+  awareness: AwarenessHelper;    // Awareness API
+  extensions: Record<string, unknown>;  // Prior extensions
+  whenReady: Promise<void>;      // Wait for prior extensions
+};
+```
+
+### Accessing Prior Extensions
+
+Extensions are chained, so each extension can access the exports of previous ones:
+
+```typescript
+const client = createWorkspace(definition)
+  .withExtension('persistence', indexeddbPersistence)
+  .withExtension('sync', ({ extensions, whenReady }) => {
+    // extensions.persistence is fully typed here!
+    // whenReady waits for all prior extensions
+    await whenReady;
+    const provider = createSyncProvider({ ... });
+    return { provider };
+  });
+```
+
+## Extension Lifecycle
+
+Extensions follow a standard lifecycle protocol:
+
+### Factory Function (Synchronous)
+
+The factory is always synchronous. It receives context and returns exports:
+
+```typescript
+const myExtension: ExtensionFactory = (context) => {
+  const db = new Database(':memory:');
+  
+  return {
+    db,                         // Custom export
+    whenReady: db.initialize(), // Optional: async init
+    destroy: () => db.close(),  // Optional: cleanup
+  };
+};
+```
+
+### Initialization (`whenReady`)
+
+The optional `whenReady` promise tracks async initialization:
+
+```typescript
+const client = createWorkspace(definition)
+  .withExtension('persistence', ({ ydoc }) => {
+    const provider = new IndexeddbPersistence(ydoc.guid, ydoc);
+    return {
+      clearData: () => provider.clearData(),
+      whenReady: provider.whenSynced, // Wait for IndexedDB load
+      destroy: () => provider.destroy(),
+    };
+  });
+
+// Wait for all extensions to initialize
+await client.whenReady;
+```
+
+### Cleanup (`destroy`)
+
+The optional `destroy` function cleans up resources:
+
+```typescript
+const client = createWorkspace(definition)
+  .withExtension('websocket', () => {
+    const ws = new WebSocket('ws://localhost:3913');
+    return {
+      send: (data) => ws.send(data),
+      destroy: () => ws.close(), // Called on client.destroy()
+    };
+  });
+
+// Cleanup all extensions
+await client.destroy();
+```
+
+## Using Extensions
+
+### Adding Extensions
+
+Use `.withExtension()` to add capabilities to your workspace:
+
+```typescript
+import { createWorkspace, defineWorkspace } from '@epicenter/workspace';
+import { indexeddbPersistence } from '@epicenter/workspace/extensions/sync/web';
+import { createSyncExtension } from '@epicenter/workspace/extensions/sync';
+
+const definition = defineWorkspace({
+  id: 'blog',
+  tables: { posts: { /* ... */ } },
+});
+
+const client = createWorkspace(definition)
+  .withExtension('persistence', indexeddbPersistence)
+  .withExtension('sync', createSyncExtension({
+    url: 'ws://localhost:3913/rooms/{id}',
+  }));
+```
+
+### Accessing Extension Exports
+
+Extension exports are available on `client.extensions`:
+
+```typescript
+// Access extension exports
+await client.extensions.persistence.clearData();
+
+// Check initialization status
+await client.extensions.sync.whenReady;
+
+// Use exported utilities
+const hasChanges = client.extensions.sync.provider.hasLocalChanges;
+```
+
+## Extension Order Matters
+
+Extensions initialize in the order they're declared. Later extensions wait for earlier ones:
+
+```typescript
+const client = createWorkspace(definition)
+  .withExtension('persistence', indexeddbPersistence) // Loads first
+  .withExtension('sync', createSyncExtension({ ... })); // Waits for persistence
+```
+
+<Warning>
+  Always add persistence **before** sync to ensure local state is loaded before connecting to the server.
+</Warning>
+
+## Storage Paths
+
+Extensions that persist data use the `.epicenter/` folder:
+
+```
+.epicenter/
+└── providers/
+    ├── persistence/
+    │   ├── blog.yjs
+    │   └── auth.yjs
+    ├── sqlite/
+    │   ├── blog.db
+    │   └── logs/
+    │       └── blog.log
+    └── markdown/
+        ├── logs/
+        │   └── blog.log
+        └── diagnostics/
+            └── blog.json
+```
+
+<Info>
+  Add `.epicenter/providers/` to your `.gitignore` — provider artifacts should not be committed.
+</Info>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="SQLite Extension" icon="database" href="/extensions/sqlite">
+    Query data with SQL using Drizzle ORM
+  </Card>
+  <Card title="Markdown Extension" icon="file-lines" href="/extensions/markdown">
+    Persist tables as human-readable markdown files
+  </Card>
+  <Card title="Sync Extension" icon="arrows-rotate" href="/extensions/sync">
+    Real-time multi-device sync via WebSocket
+  </Card>
+  <Card title="Custom Extensions" icon="code" href="/extensions/custom">
+    Build your own extensions
+  </Card>
+</CardGroup>

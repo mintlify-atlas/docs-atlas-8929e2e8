@@ -1,0 +1,260 @@
+---
+title: "Installation"
+description: "Install Epicenter and set up your development environment"
+---
+
+## Prerequisites
+
+Epicenter requires **Bun** as the runtime and package manager. Bun provides native SQLite, WebSocket support, and fast TypeScript execution.
+
+### Install Bun
+
+<Tabs>
+  <Tab title="macOS / Linux">
+    ```bash
+    curl -fsSL https://bun.sh/install | bash
+    ```
+  </Tab>
+  
+  <Tab title="Windows">
+    ```powershell
+    powershell -c "irm bun.sh/install.ps1 | iex"
+    ```
+  </Tab>
+</Tabs>
+
+Verify the installation:
+
+```bash
+bun --version
+```
+
+<Note>
+  Epicenter requires **Bun 1.0.0** or higher. Run `bun upgrade` to update to the latest version.
+</Note>
+
+## Install Epicenter
+
+### For New Projects
+
+Create a new project and install Epicenter:
+
+```bash
+mkdir my-epicenter-app
+cd my-epicenter-app
+bun init
+bun add @epicenter/workspace
+```
+
+### For Existing Projects
+
+Add Epicenter to your existing project:
+
+```bash
+bun add @epicenter/workspace
+```
+
+### Install Extensions (Optional)
+
+Extensions provide additional capabilities like persistence, SQL queries, and sync:
+
+```bash
+# Install all extensions at once
+bun add @epicenter/workspace
+
+# Extensions are included in @epicenter/workspace
+# Import them from '@epicenter/workspace/extensions'
+```
+
+## Peer Dependencies
+
+Epicenter requires **YJS** as a peer dependency:
+
+```bash
+bun add yjs
+```
+
+<Tip>
+  Most examples use **ArkType** for schema validation. Install it with:
+  ```bash
+  bun add arktype
+  ```
+</Tip>
+
+## Verify Installation
+
+Create a test file to verify everything works:
+
+```typescript test-epicenter.ts
+import { createWorkspace, defineWorkspace, defineTable } from '@epicenter/workspace';
+import { type } from 'arktype';
+
+const testTable = defineTable(
+  type({ id: 'string', name: 'string', _v: '1' })
+);
+
+const workspace = defineWorkspace({
+  id: 'test',
+  tables: { items: testTable }
+});
+
+const client = createWorkspace(workspace);
+
+console.log('✅ Epicenter is ready!');
+console.log('Workspace ID:', client.id);
+
+await client.destroy();
+```
+
+Run it:
+
+```bash
+bun test-epicenter.ts
+```
+
+You should see:
+
+```
+✅ Epicenter is ready!
+Workspace ID: test
+```
+
+## Project Structure
+
+Here's a recommended project structure for Epicenter applications:
+
+```
+my-epicenter-app/
+├── src/
+│   ├── workspaces/
+│   │   ├── blog.ts           # Blog workspace definition
+│   │   └── auth.ts           # Auth workspace definition
+│   ├── clients/
+│   │   ├── blog-client.ts    # Blog client with extensions
+│   │   └── auth-client.ts    # Auth client with extensions
+│   └── index.ts              # Application entry point
+├── .epicenter/                # Auto-generated (gitignored)
+│   └── persistence/
+│       ├── blog.yjs
+│       └── auth.yjs
+├── package.json
+└── tsconfig.json
+```
+
+<Warning>
+  Add `.epicenter/` to your `.gitignore` file. This directory contains runtime data and should not be committed.
+</Warning>
+
+## TypeScript Configuration
+
+Epicenter works best with these TypeScript settings:
+
+```json tsconfig.json
+{
+  "compilerOptions": {
+    "lib": ["ESNext"],
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "moduleDetection": "force",
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "noEmit": true,
+    "strict": true,
+    "skipLibCheck": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "noPropertyAccessFromIndexSignature": false
+  }
+}
+```
+
+## Environment Setup
+
+### Development
+
+For development, create a `.env` file:
+
+```bash .env
+# Optional: Custom data directory
+EPICENTER_DATA_DIR=./.epicenter
+
+# Optional: Sync server URL
+SYNC_URL=ws://localhost:3913/rooms/{id}
+```
+
+<Note>
+  Bun automatically loads `.env` files. No need for `dotenv` packages.
+</Note>
+
+### Production
+
+For production deployments:
+
+1. **Set data directory**: Configure where Epicenter stores data
+2. **Configure sync servers**: Set up WebSocket endpoints for real-time sync
+3. **Enable monitoring**: Add error logging and performance tracking
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Build your first workspace in 5 minutes
+  </Card>
+  
+  <Card title="Core Concepts" icon="book" href="/concepts/architecture">
+    Understand workspaces, tables, and extensions
+  </Card>
+  
+  <Card title="Extensions" icon="puzzle-piece" href="/extensions/overview">
+    Add persistence, SQLite, and sync capabilities
+  </Card>
+  
+  <Card title="API Reference" icon="code" href="/api-reference/introduction">
+    Explore the complete API documentation
+  </Card>
+</CardGroup>
+
+## Common Issues
+
+<AccordionGroup>
+  <Accordion title="Error: Cannot find module '@epicenter/workspace'">
+    Make sure you installed the package:
+    ```bash
+    bun add @epicenter/workspace
+    ```
+    
+    If using TypeScript, ensure `moduleResolution` is set to `"bundler"` in `tsconfig.json`.
+  </Accordion>
+  
+  <Accordion title="Error: Cannot find module 'yjs'">
+    Install the YJS peer dependency:
+    ```bash
+    bun add yjs
+    ```
+  </Accordion>
+  
+  <Accordion title="SQLite errors on Windows">
+    Bun's native SQLite works on all platforms. If you encounter issues:
+    
+    1. Update to the latest Bun version: `bun upgrade`
+    2. Check that you're using Bun runtime, not Node.js: `bun run script.ts`
+  </Accordion>
+  
+  <Accordion title="Type errors with ArkType">
+    Ensure you're using ArkType 2.0 or higher:
+    ```bash
+    bun add arktype@latest
+    ```
+    
+    Import `type` from arktype:
+    ```typescript
+    import { type } from 'arktype';
+    ```
+  </Accordion>
+</AccordionGroup>
+
+<Note>
+  **Still stuck?** Check the [GitHub issues](https://github.com/EpicenterHQ/epicenter/issues) or [open a new issue](https://github.com/EpicenterHQ/epicenter/issues/new).
+</Note>

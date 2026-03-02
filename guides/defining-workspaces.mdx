@@ -1,0 +1,304 @@
+---
+title: Defining Workspaces
+description: Step-by-step guide to defining workspaces with tables and KV store
+---
+
+A workspace is a self-contained module that defines your data schema, consisting of **tables** and a **key-value (KV) store**. This guide walks through creating workspace definitions with real-world examples.
+
+## What is a Workspace?
+
+Workspaces are the foundation of Epicenter applications. Each workspace:
+
+- Has a unique ID used for persistence, sync, and routing
+- Defines typed table schemas using ArkType
+- Includes a KV store for settings and metadata
+- Can be used to create multiple clients at different epochs
+
+<Note>
+  Workspace IDs should be stable and globally unique. Use the format `epicenter.<app>` for shared workspaces across Epicenter apps.
+</Note>
+
+## Basic Workspace Structure
+
+Every workspace requires three components:
+
+<Steps>
+  <Step title="Import dependencies">
+    ```typescript
+    import { defineWorkspace, defineTable, defineKv } from '@epicenter/workspace';
+    import { type } from 'arktype';
+    ```
+  </Step>
+
+  <Step title="Define your workspace">
+    ```typescript
+    const blogWorkspace = defineWorkspace({
+      id: 'blog',
+      
+      tables: {
+        // Table definitions go here
+      },
+      
+      kv: {
+        // Key-value definitions go here
+      },
+    });
+    ```
+  </Step>
+
+  <Step title="Export the workspace type">
+    ```typescript
+    export type BlogWorkspace = typeof blogWorkspace;
+    ```
+  </Step>
+</Steps>
+
+## Defining Tables
+
+Tables are defined using `defineTable()` with ArkType schemas. Each table must have:
+
+- An `id` field (string type)
+- A `_v` field (version number for migrations)
+- Any additional fields your data model requires
+
+### Simple Table Example
+
+```typescript
+tables: {
+  posts: defineTable(
+    type({
+      id: 'string',
+      title: 'string',
+      content: 'string | null',
+      published: 'boolean',
+      _v: '1',
+    })
+  ),
+}
+```
+
+### Complex Table with Validation
+
+```typescript
+tables: {
+  posts: defineTable(
+    type({
+      id: 'string',
+      permalink: 'string | null',
+      date: 'string | null',
+      subreddit: 'string',
+      gildings: 'number',
+      'title?': 'string',  // Optional field
+      'url?': 'string',
+      'body?': 'string',
+      _v: '1',
+    })
+  ),
+}
+```
+
+<Tip>
+  Use `'field?': 'type'` syntax in ArkType to make fields optional. Use `'type | null'` for nullable fields.
+</Tip>
+
+### Multiple Tables
+
+Real-world workspaces typically have multiple related tables:
+
+```typescript
+tables: {
+  posts: defineTable(
+    type({
+      id: 'string',
+      title: 'string',
+      content: 'string | null',
+      authorId: 'string',
+      published: 'boolean',
+      _v: '1',
+    })
+  ),
+  
+  comments: defineTable(
+    type({
+      id: 'string',
+      postId: 'string',
+      authorId: 'string',
+      body: 'string',
+      createdAt: 'string | null',
+      _v: '1',
+    })
+  ),
+  
+  users: defineTable(
+    type({
+      id: 'string',
+      username: 'string',
+      email: 'string',
+      bio: 'string | null',
+      _v: '1',
+    })
+  ),
+}
+```
+
+## Defining the KV Store
+
+The KV store is perfect for singleton settings, preferences, and metadata that don't fit the table model.
+
+### Simple KV Example
+
+```typescript
+kv: {
+  theme: defineKv(type({ mode: "'light' | 'dark'" })),
+  settings: defineKv(type('Record<string, string> | null')),
+}
+```
+
+### Complex KV Schemas
+
+```typescript
+kv: {
+  preferences: defineKv(
+    type({
+      notifications: 'boolean',
+      language: "'en' | 'es' | 'fr'",
+      timezone: 'string',
+    })
+  ),
+  
+  statistics: defineKv(
+    type('Record<string, string> | null')
+  ),
+}
+```
+
+## Real-World Example: Reddit Workspace
+
+Here's a production workspace from the Reddit GDPR export ingestion system:
+
+```typescript
+import { type } from 'arktype';
+import {
+  defineKv,
+  defineTable,
+  defineWorkspace,
+} from '@epicenter/workspace';
+
+export const redditWorkspace = defineWorkspace({
+  id: 'reddit',
+
+  tables: {
+    /** posts.csv */
+    posts: defineTable(
+      type({
+        id: 'string',
+        permalink: 'string | null',
+        date: 'string | null',
+        subreddit: 'string',
+        gildings: 'number',
+        'title?': 'string',
+        'url?': 'string',
+        'body?': 'string',
+        _v: '1',
+      }),
+    ),
+
+    /** comments.csv */
+    comments: defineTable(
+      type({
+        id: 'string',
+        permalink: 'string | null',
+        date: 'string | null',
+        subreddit: 'string',
+        gildings: 'number',
+        link: 'string',
+        'parent?': 'string',
+        'body?': 'string',
+        'media?': 'string',
+        _v: '1',
+      }),
+    ),
+
+    /** saved_posts.csv */
+    savedPosts: defineTable(
+      type({
+        id: 'string',
+        permalink: 'string',
+        _v: '1',
+      }),
+    ),
+  },
+
+  kv: {
+    statistics: defineKv(type('Record<string, string> | null')),
+    preferences: defineKv(type('Record<string, string> | null')),
+  },
+});
+
+export type RedditWorkspace = typeof redditWorkspace;
+```
+
+## Version Management
+
+The `_v` field enables schema migrations. When your data model evolves:
+
+1. Keep the version at `'1'` for the current schema
+2. When adding new fields, increment to `'2'`
+3. Implement migration logic in your workspace client
+
+<CodeGroup>
+```typescript Version 1
+defineTable(
+  type({
+    id: 'string',
+    title: 'string',
+    _v: '1',
+  })
+)
+```
+
+```typescript Version 2 (Future)
+defineTable(
+  type({
+    id: 'string',
+    title: 'string',
+    subtitle: 'string | null',  // New field
+    _v: '2',
+  })
+)
+```
+</CodeGroup>
+
+## Using Your Workspace
+
+Once defined, create a client from your workspace:
+
+```typescript
+import { createWorkspace } from '@epicenter/workspace';
+import { blogWorkspace } from './blog-workspace';
+
+const client = createWorkspace(blogWorkspace);
+
+// Access tables
+client.tables.posts.set({
+  id: '1',
+  title: 'Hello World',
+  content: 'My first post',
+  published: false,
+  _v: 1,
+});
+
+// Access KV store
+client.kv.set('theme', { mode: 'dark' });
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Table Operations" icon="table" href="/guides/table-operations">
+    Learn CRUD operations, validation, and observation
+  </Card>
+  <Card title="Error Handling" icon="triangle-exclamation" href="/guides/error-handling">
+    Handle validation errors and Result types
+  </Card>
+</CardGroup>

@@ -1,0 +1,512 @@
+---
+title: "Actions"
+description: "defineQuery and defineMutation, input validation, and closure-based handlers"
+icon: "bolt"
+---
+
+## What are actions?
+
+Actions are typed workspace operations that encapsulate business logic. They come in two types:
+
+- **Queries** - Read operations with no side effects (map to HTTP GET)
+- **Mutations** - Write operations that modify state (map to HTTP POST)
+
+Actions are closure-based: they capture dependencies (client, tables, extensions) at definition time instead of receiving context as parameters.
+
+## Defining actions
+
+Define actions **after** creating the workspace client:
+
+```typescript
+import { createWorkspace, defineQuery, defineMutation } from '@epicenter/workspace';
+import { type } from 'typebox';
+
+// Step 1: Create client
+const client = createWorkspace(workspace)
+  .withExtension('sqlite', sqliteProvider);
+
+// Step 2: Define actions that close over client
+export const actions = {
+  posts: {
+    getAll: defineQuery({
+      handler: () => client.tables.posts.getAllValid(),
+    }),
+    
+    getById: defineQuery({
+      input: type({ id: type.String() }),
+      handler: ({ id }) => {
+        const result = client.tables.posts.get(id);
+        if (result.status !== 'valid') {
+          return { error: 'Post not found' };
+        }
+        return result.row;
+      },
+    }),
+    
+    create: defineMutation({
+      input: type({
+        title: type.String(),
+        content: type.Optional(type.String()),
+      }),
+      handler: ({ title, content }) => {
+        const id = generateId();
+        client.tables.posts.set({
+          id,
+          _v: 1,
+          title,
+          content: content ?? '',
+          published: false,
+          views: 0,
+          createdAt: Date.now(),
+        });
+        return { id };
+      },
+    }),
+  },
+};
+```
+
+<Info>
+Actions are **callable functions** with metadata properties attached. Call them directly: `actions.posts.create({ title: 'Hello' })`.
+</Info>
+
+## Queries
+
+Queries are idempotent read operations:
+
+### Query without input
+
+```typescript
+const getAllPosts = defineQuery({
+  handler: () => client.tables.posts.getAllValid(),
+});
+
+const posts = getAllPosts();  // Call with no arguments
+```
+
+### Query with input
+
+```typescript
+const getPost = defineQuery({
+  input: type({ id: type.String() }),
+  handler: ({ id }) => {
+    const result = client.tables.posts.get(id);
+    if (result.status === 'valid') {
+      return result.row;
+    }
+    return null;
+  },
+});
+
+const post = getPost({ id: 'post-1' });  // Call with typed input
+```
+
+### Async queries
+
+```typescript
+const getPublished = defineQuery({
+  handler: async () => {
+    // Query SQLite extension
+    const { posts } = client.extensions.sqlite;
+    return await posts
+      .select()
+      .where(eq(posts.published, true))
+      .orderBy(desc(posts.createdAt));
+  },
+});
+
+await getPublished();
+```
+
+<Tip>
+Use queries for reads. They map to HTTP GET when exposed via server.
+</Tip>
+
+## Mutations
+
+Mutations modify state or have side effects:
+
+### Mutation without input
+
+```typescript
+const publishAll = defineMutation({
+  handler: () => {
+    const posts = client.tables.posts.getAllValid();
+    client.batch(() => {
+      for (const post of posts) {
+        client.tables.posts.update(post.id, { published: true });
+      }
+    });
+  },
+});
+
+publishAll();
+```
+
+### Mutation with input
+
+```typescript
+const createPost = defineMutation({
+  input: type({
+    title: type.String(),
+    content: type.Optional(type.String()),
+  }),
+  handler: ({ title, content }) => {
+    const id = generateId();
+    client.tables.posts.set({
+      id,
+      _v: 1,
+      title,
+      content: content ?? '',
+      published: false,
+      views: 0,
+      createdAt: Date.now(),
+    });
+    return { id };
+  },
+});
+
+const result = createPost({ title: 'Hello World' });
+console.log('Created:', result.id);
+```
+
+### Async mutations
+
+```typescript
+const syncToMarkdown = defineMutation({
+  description: 'Export all posts to markdown files',
+  handler: async () => {
+    await client.extensions.markdown.pullToMarkdown();
+    return { success: true };
+  },
+});
+
+await syncToMarkdown();
+```
+
+<Note>
+Mutations map to HTTP POST when exposed via server.
+</Note>
+
+## Input validation
+
+Actions support Standard Schema validation (TypeBox, Zod, Valibot, Effect):
+
+### TypeBox (recommended)
+
+```typescript
+import { type } from 'typebox';
+
+const createPost = defineMutation({
+  input: type({
+    title: type.String({ minLength: 1, maxLength: 200 }),
+    content: type.String(),
+    tags: type.Array(type.String()),
+    published: type.Boolean(),
+  }),
+  handler: (input) => {
+    // input is fully typed
+    const id = generateId();
+    client.tables.posts.set({ id, _v: 1, ...input, views: 0 });
+    return { id };
+  },
+});
+```
+
+### Zod
+
+```typescript
+import { z } from 'zod';
+
+const createPost = defineMutation({
+  input: z.object({
+    title: z.string().min(1).max(200),
+    content: z.string(),
+    tags: z.array(z.string()),
+    published: z.boolean(),
+  }),
+  handler: (input) => {
+    // input is fully typed
+  },
+});
+```
+
+<Warning>
+Input schemas are converted to JSON Schema for MCP/CLI/OpenAPI. Avoid transforms (`.pipe()`, `.transform()`), custom validation (`.filter()`, `.refine()`), and non-JSON types (bigint, Date, Map, Set).
+</Warning>
+
+## Closure-based design
+
+Actions use JavaScript closures to capture dependencies:
+
+```typescript
+// Client created first
+const client = createWorkspace(workspace)
+  .withExtension('sqlite', sqliteProvider);
+
+// Actions capture client via closure
+const actions = {
+  getStats: defineQuery({
+    handler: () => {
+      // Access client from closure (not parameter)
+      const total = client.tables.posts.count();
+      const published = client.tables.posts.filter(p => p.published).length;
+      return { total, published };
+    },
+  }),
+};
+```
+
+Benefits:
+
+- **Zero annotation ceremony** - TypeScript infers everything naturally
+- **Type-safe** - Full type inference for client and tables
+- **Simpler signatures** - `(input?) => output` instead of `(ctx, input?) => output`
+- **Natural JavaScript** - Uses standard closures, no framework magic
+
+<Tip>
+Define actions after the client. They need to close over the fully-configured client with all extensions.
+</Tip>
+
+## Organizing actions
+
+Group related actions into namespaces:
+
+```typescript
+export const actions = {
+  posts: {
+    getAll: defineQuery({ handler: () => client.tables.posts.getAllValid() }),
+    getById: defineQuery({ input: type({ id: type.String() }), handler: ... }),
+    create: defineMutation({ input: type({ ... }), handler: ... }),
+    update: defineMutation({ input: type({ ... }), handler: ... }),
+    delete: defineMutation({ input: type({ id: type.String() }), handler: ... }),
+  },
+  users: {
+    getProfile: defineQuery({ handler: ... }),
+    updateProfile: defineMutation({ input: type({ ... }), handler: ... }),
+  },
+};
+```
+
+This creates intuitive namespaces:
+- `actions.posts.getAll()`
+- `actions.posts.create({ title: 'Hello' })`
+- `actions.users.getProfile()`
+
+## Action metadata
+
+Actions have metadata properties for introspection:
+
+```typescript
+const getPost = defineQuery({
+  description: 'Get a post by ID',
+  input: type({ id: type.String() }),
+  handler: ({ id }) => client.tables.posts.get(id),
+});
+
+console.log(getPost.type);         // 'query'
+console.log(getPost.description);  // 'Get a post by ID'
+console.log(getPost.input);        // TypeBox schema
+```
+
+Metadata is used by:
+- **Server adapter** - Generate HTTP routes
+- **CLI adapter** - Generate command-line interface
+- **MCP adapter** - Generate Model Context Protocol tools
+- **OpenAPI** - Generate API documentation
+
+## Return values
+
+Actions can return any value:
+
+### Direct values
+
+```typescript
+const getCount = defineQuery({
+  handler: () => client.tables.posts.count(),
+});
+// Returns: number
+```
+
+### Objects
+
+```typescript
+const getStats = defineQuery({
+  handler: () => ({
+    total: client.tables.posts.count(),
+    published: client.tables.posts.filter(p => p.published).length,
+  }),
+});
+// Returns: { total: number, published: number }
+```
+
+### Error handling with discriminated unions
+
+```typescript
+const getPost = defineQuery({
+  input: type({ id: type.String() }),
+  handler: ({ id }) => {
+    const result = client.tables.posts.get(id);
+    if (result.status !== 'valid') {
+      return { error: 'Post not found' };
+    }
+    return { data: result.row };
+  },
+});
+// Returns: { error: string } | { data: Post }
+```
+
+<Info>
+Actions don't enforce a specific error handling pattern. Use whatever fits your application (Result types, exceptions, discriminated unions, etc.).
+</Info>
+
+## Accessing extensions
+
+Actions can access extension exports via closure:
+
+```typescript
+const client = createWorkspace(workspace)
+  .withExtension('sqlite', sqliteProvider)
+  .withExtension('markdown', markdownProvider);
+
+const actions = {
+  // Access SQLite extension
+  getPublishedPosts: defineQuery({
+    handler: async () => {
+      const { posts } = client.extensions.sqlite;
+      return await posts
+        .select()
+        .where(eq(posts.published, true));
+    },
+  }),
+  
+  // Access markdown extension
+  exportToMarkdown: defineMutation({
+    handler: async () => {
+      await client.extensions.markdown.pullToMarkdown();
+      return { success: true };
+    },
+  }),
+};
+```
+
+## Calling actions
+
+Actions are callable functions:
+
+```typescript
+// No input
+const posts = actions.posts.getAll();
+
+// With input
+const post = actions.posts.getById({ id: 'post-1' });
+
+// Async
+const result = await actions.posts.create({ title: 'Hello' });
+```
+
+## Type guards
+
+Check if a value is an action:
+
+```typescript
+import { isAction, isQuery, isMutation } from '@epicenter/workspace';
+
+if (isAction(value)) {
+  console.log(value.type);  // 'query' | 'mutation'
+  value({ id: '1' });       // Call it
+}
+
+if (isQuery(value)) {
+  console.log('This is a query');
+}
+
+if (isMutation(value)) {
+  console.log('This is a mutation');
+}
+```
+
+## Iterating actions
+
+Traverse action trees for adapters:
+
+```typescript
+import { iterateActions } from '@epicenter/workspace';
+
+for (const [action, path] of iterateActions(actions)) {
+  const route = path.join('/');
+  console.log(`${action.type.toUpperCase()} /${route}`);
+  // query GET /posts/getAll
+  // query GET /posts/getById
+  // mutation POST /posts/create
+}
+```
+
+<Note>
+Adapters (Server, CLI, MCP) use `iterateActions()` to discover and register all actions.
+</Note>
+
+## Best practices
+
+<AccordionGroup>
+  <Accordion title="Define actions after creating the client">
+    ```typescript
+    // Correct: client created first
+    const client = createWorkspace(workspace);
+    const actions = {
+      getAll: defineQuery({ handler: () => client.tables.posts.getAllValid() }),
+    };
+    ```
+  </Accordion>
+  
+  <Accordion title="Use queries for reads, mutations for writes">
+    ```typescript
+    // Read: use query
+    const getPost = defineQuery({ ... });
+    
+    // Write: use mutation
+    const createPost = defineMutation({ ... });
+    ```
+  </Accordion>
+  
+  <Accordion title="Group related actions into namespaces">
+    ```typescript
+    const actions = {
+      posts: {
+        getAll: defineQuery({ ... }),
+        create: defineMutation({ ... }),
+      },
+      users: {
+        getProfile: defineQuery({ ... }),
+      },
+    };
+    ```
+  </Accordion>
+  
+  <Accordion title="Add descriptions for documentation">
+    ```typescript
+    const createPost = defineMutation({
+      description: 'Create a new blog post',
+      input: type({ ... }),
+      handler: ({ ... }) => { ... },
+    });
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Server adapter" icon="server" href="/api/create-server">
+    Expose actions via HTTP/WebSocket
+  </Card>
+  <Card title="defineQuery API" icon="book" href="/api/define-query">
+    Complete API reference for queries
+  </Card>
+  <Card title="defineMutation API" icon="book" href="/api/define-mutation">
+    Complete API reference for mutations
+  </Card>
+  <Card title="Error handling guide" icon="triangle-exclamation" href="/guides/error-handling">
+    Patterns for error handling
+  </Card>
+</CardGroup>

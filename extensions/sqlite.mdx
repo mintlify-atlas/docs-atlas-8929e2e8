@@ -1,0 +1,468 @@
+---
+title: SQLite Extension
+description: Query workspace data with SQL using Drizzle ORM
+---
+
+## Overview
+
+The SQLite extension mirrors your YJS workspace data to a local SQLite database, enabling powerful SQL queries via Drizzle ORM. It auto-syncs bidirectionally with YJS, so you get both real-time collaboration and relational queries.
+
+### Key Features
+
+- **Drizzle ORM integration** — Type-safe SQL queries with full TypeScript support
+- **Automatic sync** — Changes flow YJS ↔ SQLite automatically
+- **Complex queries** — JOIN, aggregate, filter, sort with SQL
+- **WAL mode** — Concurrent read/write access
+- **Validation logging** — Tracks schema errors without blocking sync
+
+## Installation
+
+The SQLite extension is built-in to `@epicenter/workspace`. No additional packages needed.
+
+```bash
+bun add @epicenter/workspace
+```
+
+## Basic Setup
+
+### Adding the Extension
+
+Use `.withExtension()` to add SQLite capabilities:
+
+```typescript
+import { createWorkspace, defineWorkspace } from '@epicenter/workspace';
+import { sqliteProvider } from '@epicenter/workspace';
+
+const definition = defineWorkspace({
+  id: 'blog',
+  tables: {
+    posts: defineTable(
+      type({ id: 'string', title: 'string', published: 'boolean', _v: '1' })
+    ),
+  },
+});
+
+const client = createWorkspace(definition)
+  .withExtension('sqlite', sqliteProvider);
+```
+
+<Note>
+  The SQLite extension is **Node.js only**. For browser applications, use IndexedDB persistence instead.
+</Note>
+
+### Extension Exports
+
+The SQLite extension exports:
+
+```typescript
+{
+  db: BetterSQLite3Database,  // Drizzle database instance
+  posts: DrizzleTable,         // Drizzle table for 'posts'
+  users: DrizzleTable,         // Drizzle table for 'users'
+  // ... one export per workspace table
+  pullToSqlite: () => void,    // Manual YJS → SQLite sync
+  pushFromSqlite: () => void,  // Manual SQLite → YJS sync
+}
+```
+
+## Querying with Drizzle
+
+### Basic Queries
+
+Access tables via `client.extensions.sqlite`:
+
+```typescript
+import { eq, desc } from '@epicenter/workspace';
+
+// Get all published posts
+const published = await client.extensions.sqlite.posts
+  .select()
+  .where(eq(client.extensions.sqlite.posts.published, true))
+  .orderBy(desc(client.extensions.sqlite.posts.publishedAt));
+
+// Get a single post
+const post = await client.extensions.sqlite.posts
+  .select()
+  .where(eq(client.extensions.sqlite.posts.id, '123'))
+  .limit(1);
+```
+
+### Filtering and Sorting
+
+Use Drizzle operators for complex queries:
+
+```typescript
+import { eq, gt, and, or, like } from '@epicenter/workspace';
+
+const { posts } = client.extensions.sqlite;
+
+// Complex filters
+const results = await posts
+  .select()
+  .where(
+    and(
+      eq(posts.published, true),
+      gt(posts.views, 100),
+      like(posts.title, '%React%')
+    )
+  )
+  .orderBy(desc(posts.publishedAt));
+
+// OR conditions
+const draftsOrFeatured = await posts
+  .select()
+  .where(
+    or(
+      eq(posts.published, false),
+      eq(posts.featured, true)
+    )
+  );
+```
+
+### Aggregations
+
+Use SQL aggregation functions:
+
+```typescript
+import { count, avg, sum } from 'drizzle-orm';
+
+const { posts } = client.extensions.sqlite;
+
+// Post count by category
+const stats = await posts
+  .select({
+    category: posts.category,
+    total: count(),
+    avgViews: avg(posts.views),
+    totalViews: sum(posts.views),
+  })
+  .groupBy(posts.category);
+
+// Example result:
+// [
+//   { category: 'tech', total: 15, avgViews: 234, totalViews: 3510 },
+//   { category: 'personal', total: 8, avgViews: 89, totalViews: 712 },
+// ]
+```
+
+### Joins (Multiple Tables)
+
+Join across tables for relational queries:
+
+```typescript
+const { posts, users } = client.extensions.sqlite;
+
+const postsWithAuthors = await posts
+  .select({
+    postId: posts.id,
+    title: posts.title,
+    authorName: users.name,
+    authorEmail: users.email,
+  })
+  .innerJoin(users, eq(posts.authorId, users.id))
+  .where(eq(posts.published, true));
+```
+
+## Auto-Sync Behavior
+
+### YJS → SQLite (Automatic)
+
+When you write to YJS, the SQLite extension auto-updates:
+
+```typescript
+// Write via YJS
+client.tables.posts.set({
+  id: '123',
+  title: 'Hello World',
+  published: true,
+  _v: 1,
+});
+
+// SQLite is updated automatically!
+const post = await client.extensions.sqlite.posts
+  .select()
+  .where(eq(client.extensions.sqlite.posts.id, '123'));
+// ✅ Contains the new row
+```
+
+### How It Works
+
+The SQLite extension:
+
+1. **Observes YJS changes** — Listens to `table.observe()` for all tables
+2. **Prevents loops** — Uses sync coordination flags to avoid infinite updates
+3. **Validates on write** — Logs validation errors without blocking sync
+4. **Performs full sync** — On startup, syncs all YJS data to SQLite
+
+```typescript
+// Internal sync logic (automatic)
+ydoc.on('update', () => {
+  if (syncInProgress) return; // Prevent loop
+  syncInProgress = true;
+  
+  const rows = table.getAllValid();
+  db.delete(sqliteTable).run(); // Clear existing
+  db.insert(sqliteTable).values(rows).run(); // Insert all
+  
+  syncInProgress = false;
+});
+```
+
+## Manual Sync Operations
+
+### Pull (YJS → SQLite)
+
+Manually sync YJS data to SQLite:
+
+```typescript
+// Replace all SQLite data with current YJS state
+await client.extensions.sqlite.pullToSqlite();
+```
+
+<Warning>
+  `pullToSqlite()` replaces **all** SQLite data with YJS data. Use with caution.
+</Warning>
+
+### Push (SQLite → YJS)
+
+Manually sync SQLite data to YJS:
+
+```typescript
+// Replace all YJS data with current SQLite state
+await client.extensions.sqlite.pushFromSqlite();
+```
+
+<Warning>
+  `pushFromSqlite()` replaces **all** YJS data with SQLite data. Use for imports or recovery only.
+</Warning>
+
+## Using in Actions
+
+Combine SQLite queries with YJS writes in actions:
+
+```typescript
+import { defineQuery, defineMutation } from '@epicenter/workspace';
+import { eq, desc } from '@epicenter/workspace';
+import { type } from 'arktype';
+
+const blogActions = {
+  // Query: Read from SQLite
+  getPublishedPosts: defineQuery({
+    handler: async () => {
+      const { posts } = client.extensions.sqlite;
+      return await posts
+        .select()
+        .where(eq(posts.published, true))
+        .orderBy(desc(posts.publishedAt))
+        .limit(10);
+    },
+  }),
+
+  // Mutation: Write to YJS (SQLite auto-syncs)
+  publishPost: defineMutation({
+    input: type({ id: 'string' }),
+    handler: ({ id }) => {
+      const result = client.tables.posts.update(id, {
+        published: true,
+        publishedAt: DateTimeString.now(),
+      });
+      
+      if (result.status === 'not_found') {
+        return Err({ message: 'Post not found' });
+      }
+      
+      return Ok(result.row);
+    },
+  }),
+
+  // Complex query with aggregation
+  getPostStats: defineQuery({
+    handler: async () => {
+      const { posts } = client.extensions.sqlite;
+      return await posts
+        .select({
+          category: posts.category,
+          total: count(),
+          avgViews: avg(posts.views),
+        })
+        .groupBy(posts.category);
+    },
+  }),
+};
+```
+
+## Storage Location
+
+SQLite databases are stored in `.epicenter/providers/sqlite/`:
+
+```
+.epicenter/
+└── providers/
+    └── sqlite/
+        ├── blog.db          # SQLite database
+        └── logs/
+            └── blog.log     # Validation error log
+```
+
+## Performance Considerations
+
+### WAL Mode
+
+The SQLite extension uses Write-Ahead Logging (WAL) mode for:
+
+- **Concurrent access** — Multiple readers don't block writes
+- **Better performance** — Writes are buffered in WAL file
+- **Atomic commits** — All-or-nothing transaction guarantees
+
+### Query Optimization
+
+For complex queries, use SQLite instead of YJS:
+
+```typescript
+// ❌ Slow: Filter in memory
+const published = client.tables.posts
+  .getAllValid()
+  .filter(p => p.published && p.views > 100);
+
+// ✅ Fast: Filter in SQLite
+const { posts } = client.extensions.sqlite;
+const published = await posts
+  .select()
+  .where(
+    and(
+      eq(posts.published, true),
+      gt(posts.views, 100)
+    )
+  );
+```
+
+### Indexing
+
+Drizzle automatically creates indexes based on your schema. For custom indexes:
+
+```typescript
+import { sql } from 'drizzle-orm';
+
+const { db } = client.extensions.sqlite;
+
+// Create custom index
+db.run(sql`CREATE INDEX idx_posts_category ON posts(category)`);
+```
+
+## Error Handling
+
+### Validation Errors
+
+Validation errors are logged but don't block sync:
+
+```typescript
+// Write invalid data to YJS
+client.tables.posts.set({
+  id: '123',
+  title: 'Missing fields',
+  // published: true, // Missing required field
+  _v: 1,
+});
+
+// SQLite sync continues, error is logged to:
+// .epicenter/providers/sqlite/logs/blog.log
+```
+
+### Query Errors
+
+Handle Drizzle query errors:
+
+```typescript
+try {
+  const posts = await client.extensions.sqlite.posts
+    .select()
+    .where(eq(client.extensions.sqlite.posts.id, postId));
+  return Ok(posts);
+} catch (error) {
+  return Err({ message: 'Database query failed', cause: error });
+}
+```
+
+## Complete Example
+
+Here's a full example with SQLite queries:
+
+```typescript
+import { createWorkspace, defineWorkspace, defineTable } from '@epicenter/workspace';
+import { sqliteProvider, eq, desc, count } from '@epicenter/workspace';
+import { type } from 'arktype';
+
+const definition = defineWorkspace({
+  id: 'blog',
+  tables: {
+    posts: defineTable(
+      type({
+        id: 'string',
+        title: 'string',
+        content: 'string',
+        category: "'tech' | 'personal'",
+        published: 'boolean',
+        views: 'number',
+        publishedAt: 'string | null',
+        _v: '1',
+      })
+    ),
+  },
+});
+
+const client = createWorkspace(definition)
+  .withExtension('sqlite', sqliteProvider);
+
+await client.whenReady;
+
+// Write via YJS
+client.tables.posts.set({
+  id: '1',
+  title: 'Hello World',
+  content: 'My first post',
+  category: 'tech',
+  published: true,
+  views: 0,
+  publishedAt: new Date().toISOString(),
+  _v: 1,
+});
+
+// Query via SQLite
+const { posts } = client.extensions.sqlite;
+
+const published = await posts
+  .select()
+  .where(eq(posts.published, true))
+  .orderBy(desc(posts.publishedAt));
+
+console.log('Published posts:', published);
+
+// Aggregate query
+const stats = await posts
+  .select({
+    category: posts.category,
+    total: count(),
+  })
+  .groupBy(posts.category);
+
+console.log('Stats by category:', stats);
+
+await client.destroy();
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Drizzle ORM Docs" icon="book" href="https://orm.drizzle.team">
+    Learn advanced Drizzle ORM features
+  </Card>
+  <Card title="Markdown Extension" icon="file-lines" href="/extensions/markdown">
+    Persist tables as markdown files
+  </Card>
+  <Card title="Actions" icon="bolt" href="/concepts/actions">
+    Combine queries and mutations
+  </Card>
+  <Card title="Table Operations" icon="table" href="/api/table-operations">
+    Learn YJS table operations
+  </Card>
+</CardGroup>

@@ -1,0 +1,186 @@
+---
+title: Error Handling
+description: Error types and utilities for Epicenter extensions and APIs
+---
+
+## Overview
+
+Epicenter uses tagged errors from the [wellcrafted/error](https://github.com/wellcrafted/error) library to provide type-safe, contextual error handling throughout the codebase.
+
+## ExtensionError
+
+The `ExtensionError` type is used for errors that occur in workspace extensions and table operations.
+
+**Source**: `~/workspace/source/packages/epicenter/src/shared/errors.ts:12`
+
+### Creating Extension Errors
+
+```typescript
+import { ExtensionErr } from '@epicenter/epicenter/shared/errors';
+
+// Simple error with message
+throw ExtensionErr('Failed to process row');
+
+// Error with context
+throw ExtensionErr('Row validation failed', {
+  tableName: 'users',
+  rowId: 'user-123',
+  operation: 'update'
+});
+
+// Error with file context
+throw ExtensionErr('File not found', {
+  filename: 'config.json',
+  filePath: '/workspace/settings/config.json',
+  directory: '/workspace/settings'
+});
+```
+
+### Error Context
+
+The `ExtensionError` supports the following optional context fields:
+
+```typescript
+type ExtensionErrorContext = {
+  tableName?: string;    // Name of the table involved
+  rowId?: string;        // ID of the row involved
+  filename?: string;     // Name of the file involved
+  filePath?: string;     // Full path to the file
+  directory?: string;    // Directory path
+  operation?: string;    // Operation being performed
+};
+```
+
+### Type-Safe Error Handling
+
+```typescript
+import { ExtensionError } from '@epicenter/epicenter/shared/errors';
+
+try {
+  // Operation that might throw
+  await processRow(data);
+} catch (error) {
+  if (error instanceof ExtensionError) {
+    console.error('Extension error:', error.message);
+    console.error('Context:', error.context);
+    
+    // Access typed context fields
+    if (error.context?.tableName) {
+      console.error('Failed table:', error.context.tableName);
+    }
+  } else {
+    // Handle other errors
+    throw error;
+  }
+}
+```
+
+### Using with Result Types
+
+Extension errors can be used with Epicenter's `Result<T, E>` pattern:
+
+```typescript
+import { Result } from 'wellcrafted/result';
+import { ExtensionErr } from '@epicenter/epicenter/shared/errors';
+
+function updateRow(id: string, data: unknown): Result<Row, ExtensionError> {
+  const row = getRow(id);
+  
+  if (!row) {
+    return Result.err(
+      ExtensionErr('Row not found', { rowId: id, operation: 'update' })
+    );
+  }
+  
+  return Result.ok(row);
+}
+
+// Usage
+const result = updateRow('user-123', { name: 'Alice' });
+
+if (result.isErr()) {
+  const error = result.error;
+  console.error(error.message, error.context);
+} else {
+  console.log('Updated:', result.value);
+}
+```
+
+## Implementation Details
+
+The `ExtensionError` is created using `createTaggedError` from wellcrafted/error:
+
+```typescript
+import { createTaggedError } from 'wellcrafted/error';
+
+type ExtensionErrorContext = {
+  tableName?: string;
+  rowId?: string;
+  filename?: string;
+  filePath?: string;
+  directory?: string;
+  operation?: string;
+};
+
+export const { ExtensionError, ExtensionErr } = createTaggedError(
+  'ExtensionError',
+).withContext<ExtensionErrorContext | undefined>();
+
+export type ExtensionError = ReturnType<typeof ExtensionError>;
+```
+
+This provides:
+- A `ExtensionError` class that extends `Error`
+- A `ExtensionErr` factory function for creating instances
+- Type-safe context access
+- Proper error stack traces
+
+## Planned Error Types
+
+<Note>
+The following error types are planned but not yet implemented:
+</Note>
+
+### WorkspaceError
+
+For errors related to workspace-level operations:
+
+```typescript
+// Planned API
+throw WorkspaceErr('Workspace not initialized', {
+  workspaceId: 'ws-123',
+  operation: 'load'
+});
+```
+
+### TableError
+
+For table-specific validation and operation errors:
+
+```typescript
+// Planned API
+throw TableErr('Schema migration failed', {
+  tableName: 'users',
+  fromVersion: 1,
+  toVersion: 2,
+  reason: 'Missing required field'
+});
+```
+
+### ValidationError
+
+For schema validation failures with detailed field information:
+
+```typescript
+// Planned API
+throw ValidationErr('Invalid row data', {
+  tableName: 'users',
+  rowId: 'user-123',
+  fields: {
+    email: 'Invalid email format',
+    age: 'Must be a positive number'
+  }
+});
+```
+
+These error types would follow the same pattern as `ExtensionError`, using `createTaggedError` with appropriate context types.

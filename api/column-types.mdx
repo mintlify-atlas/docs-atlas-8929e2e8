@@ -1,0 +1,328 @@
+---
+title: Schema Types
+description: Define table and KV schemas using arktype
+icon: "code"
+---
+
+## Overview
+
+Epicenter uses [arktype](https://arktype.io) for schema definition. All table rows and KV values are validated against arktype schemas at runtime. This page covers common schema patterns for tables and KV stores.
+
+## Table Schemas
+
+All table schemas must include two required fields:
+- `id: 'string'` - Unique row identifier
+- `_v: number` - Schema version for migrations
+
+### Basic Types
+
+```typescript
+import { type } from 'arktype';
+import { defineTable } from '@epicenter/workspace';
+
+// String field
+const users = defineTable(
+  type({ id: 'string', email: 'string', _v: '1' })
+);
+
+// Number field
+const posts = defineTable(
+  type({ id: 'string', views: 'number', _v: '1' })
+);
+
+// Boolean field
+const todos = defineTable(
+  type({ id: 'string', completed: 'boolean', _v: '1' })
+);
+```
+
+### Optional Fields
+
+```typescript
+const posts = defineTable(
+  type({ 
+    id: 'string', 
+    title: 'string',
+    'description?': 'string',  // Optional field
+    _v: '1'
+  })
+);
+```
+
+### Array Fields
+
+```typescript
+const notes = defineTable(
+  type({ 
+    id: 'string',
+    tags: 'string[]',           // Array of strings
+    scores: 'number[]',         // Array of numbers
+    _v: '1'
+  })
+);
+```
+
+### Literal Types (Enums)
+
+```typescript
+const tasks = defineTable(
+  type({ 
+    id: 'string',
+    status: "'todo' | 'in_progress' | 'done'",
+    priority: "'low' | 'medium' | 'high'",
+    _v: '1'
+  })
+);
+```
+
+### Date/Timestamp Fields
+
+```typescript
+const events = defineTable(
+  type({ 
+    id: 'string',
+    createdAt: 'number',        // Unix timestamp in milliseconds
+    updatedAt: 'number',
+    _v: '1'
+  })
+);
+
+// Usage
+tables.events.set({
+  id: '1',
+  createdAt: Date.now(),
+  updatedAt: Date.now(),
+  _v: 1
+});
+```
+
+### JSON Fields
+
+```typescript
+const documents = defineTable(
+  type({ 
+    id: 'string',
+    metadata: 'unknown',        // Any JSON-serializable value
+    _v: '1'
+  })
+);
+```
+
+### Nested Objects
+
+```typescript
+const profiles = defineTable(
+  type({ 
+    id: 'string',
+    name: 'string',
+    address: {
+      street: 'string',
+      city: 'string',
+      'zipCode?': 'string'
+    },
+    _v: '1'
+  })
+);
+```
+
+### Numeric Parsing
+
+```typescript
+// Parse string numbers to actual numbers
+const analytics = defineTable(
+  type({ 
+    id: 'string',
+    views: type('string.numeric.parse'),  // "42" -> 42
+    _v: '1'
+  })
+);
+```
+
+### Custom Validation
+
+```typescript
+// Email validation
+const users = defineTable(
+  type({ 
+    id: 'string',
+    email: 'email',              // Built-in email validation
+    _v: '1'
+  })
+);
+
+// URL validation
+const links = defineTable(
+  type({ 
+    id: 'string',
+    url: 'string.url',           // URL validation
+    _v: '1'
+  })
+);
+
+// Custom constraints
+const products = defineTable(
+  type({ 
+    id: 'string',
+    price: 'number>=0',          // Non-negative numbers
+    quantity: 'number>0',        // Positive numbers
+    _v: '1'
+  })
+);
+```
+
+## KV Schemas
+
+KV stores are more flexible - the `_v` field is optional.
+
+### Basic KV Store
+
+```typescript
+import { defineKv } from '@epicenter/workspace';
+
+const sidebar = defineKv(
+  type({ collapsed: 'boolean', width: 'number' })
+);
+```
+
+### KV with Literal Types
+
+```typescript
+const theme = defineKv(
+  type({ 
+    mode: "'light' | 'dark' | 'system'",
+    fontSize: 'number',
+    fontFamily: 'string'
+  })
+);
+```
+
+### KV with Nested Objects
+
+```typescript
+const preferences = defineKv(
+  type({ 
+    editor: {
+      tabSize: 'number',
+      lineNumbers: 'boolean',
+      wordWrap: 'boolean'
+    },
+    ui: {
+      sidebarWidth: 'number',
+      showMinimap: 'boolean'
+    }
+  })
+);
+```
+
+## Schema Transformations
+
+Use `.pipe()` to transform data during validation:
+
+```typescript
+// Transform empty strings to null
+const emptyToNull = type('string').pipe((s) => s === '' ? null : s);
+
+const posts = defineTable(
+  type({ 
+    id: 'string',
+    description: emptyToNull,
+    _v: '1'
+  })
+);
+
+// Parse dates
+const parseDateToIso = (dateStr: string) => {
+  const date = new Date(dateStr);
+  return isNaN(date.getTime()) ? null : date.toISOString();
+};
+
+const dateToIso = type('string').pipe(parseDateToIso);
+
+const events = defineTable(
+  type({ 
+    id: 'string',
+    date: dateToIso,
+    _v: '1'
+  })
+);
+```
+
+## Common Patterns
+
+### User Table
+
+```typescript
+const users = defineTable(
+  type({ 
+    id: 'string',
+    email: 'email',
+    name: 'string',
+    'avatar?': 'string',
+    createdAt: 'number',
+    _v: '1'
+  })
+);
+```
+
+### Post/Article Table
+
+```typescript
+const posts = defineTable(
+  type({ 
+    id: 'string',
+    title: 'string',
+    content: 'string',
+    authorId: 'string',
+    published: 'boolean',
+    tags: 'string[]',
+    createdAt: 'number',
+    updatedAt: 'number',
+    _v: '1'
+  })
+);
+```
+
+### Settings KV
+
+```typescript
+const settings = defineKv(
+  type({ 
+    theme: "'light' | 'dark' | 'system'",
+    language: 'string',
+    notifications: 'boolean',
+    autoSave: 'boolean'
+  })
+);
+```
+
+## Schema Versioning
+
+The `_v` field enables schema versioning and migrations. Tables defined with arktype schemas automatically support multi-version rows through the version field.
+
+## Type Inference
+
+Epicenter automatically infers TypeScript types from your schemas:
+
+```typescript
+const users = defineTable(
+  type({ id: 'string', email: 'string', name: 'string', _v: '1' })
+);
+
+const workspace = defineWorkspace({ id: 'app', tables: { users } });
+const client = createWorkspace(workspace);
+
+// TypeScript knows the exact type:
+// { id: string; email: string; name: string; _v: 1 }
+client.tables.users.set({
+  id: '1',
+  email: 'user@example.com',
+  name: 'John Doe',
+  _v: 1
+});
+```
+
+## See Also
+
+- [arktype Documentation](https://arktype.io) - Full arktype reference
+- [Table Operations](/api/table-operations) - CRUD operations on tables
+- [Client Methods](/api/client-methods) - KV operations and client API

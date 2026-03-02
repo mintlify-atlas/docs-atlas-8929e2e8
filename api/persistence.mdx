@@ -1,0 +1,352 @@
+---
+title: 'Persistence Extensions'
+description: 'Filesystem and IndexedDB persistence for Epicenter workspaces'
+icon: 'hard-drive'
+---
+
+## Overview
+
+Epicenter provides two persistence extensions for storing workspace data locally:
+
+- **`persistence()`** - Filesystem persistence for Node.js/Desktop (Tauri, Electron, Bun)
+- **`indexeddbPersistence()`** - Browser IndexedDB persistence for web apps
+
+Both extensions auto-save on every YJS update and load existing state on startup.
+
+## Filesystem Persistence
+
+### Import
+
+```typescript
+import { persistence } from '@epicenter/workspace/extensions/sync/desktop';
+// or
+import { persistence } from '@epicenter/workspace/extensions';
+```
+
+### Function Signature
+
+<ParamField path="context" type="ExtensionContext" required>
+  Extension context containing the workspace's Y.Doc
+  
+  <Expandable title="Properties">
+    <ParamField path="ydoc" type="Y.Doc" required>
+      The Yjs document instance for the workspace
+    </ParamField>
+    
+    <ParamField path="id" type="string" required>
+      The workspace ID
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField path="config" type="PersistenceConfig" required>
+  Persistence configuration
+  
+  <Expandable title="Properties">
+    <ParamField path="filePath" type="string" required>
+      Absolute path to the `.yjs` file for storing YJS state
+      
+      Example: `join('.epicenter', 'persistence', 'blog.yjs')`
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="Extension" type="object">
+  Extension instance with lifecycle methods
+  
+  <Expandable title="Properties">
+    <ResponseField name="whenReady" type="Promise<void>">
+      Promise that resolves when initial state is loaded from disk
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+### Basic Usage
+
+```typescript
+import { createWorkspace } from '@epicenter/workspace';
+import { persistence } from '@epicenter/workspace/extensions/sync/desktop';
+import { join } from 'node:path';
+
+const workspace = createWorkspace(definition)
+  .withExtension('persistence', (ctx) =>
+    persistence(ctx, {
+      filePath: join('.epicenter', 'persistence', `${ctx.id}.yjs`),
+    })
+  );
+```
+
+### How It Works
+
+1. **Directory Creation**: Creates parent directory if it doesn't exist
+2. **Load State**: Loads existing `.yjs` file on startup (if exists)
+3. **Auto-Save**: Writes to disk on every YJS update (synchronous)
+4. **Binary Format**: Stores YJS state as binary for efficiency
+
+### Storage Location
+
+Default pattern: `.epicenter/persistence/{workspaceId}.yjs`
+
+```
+.epicenter/
+└── persistence/
+    ├── blog.yjs
+    ├── tasks.yjs
+    └── notes.yjs
+```
+
+### With Sync Extension
+
+Always add persistence **before** sync to ensure local state loads first:
+
+```typescript
+import { createSyncExtension } from '@epicenter/workspace/extensions/sync';
+
+const workspace = createWorkspace(definition)
+  .withExtension('persistence', (ctx) =>
+    persistence(ctx, {
+      filePath: join('.epicenter', 'persistence', `${ctx.id}.yjs`),
+    })
+  )
+  .withExtension('sync', createSyncExtension({
+    url: 'ws://localhost:3913/rooms/{id}',
+  }));
+```
+
+## IndexedDB Persistence
+
+### Import
+
+```typescript
+import { indexeddbPersistence } from '@epicenter/workspace/extensions/sync/web';
+```
+
+### Function Signature
+
+<ParamField path="context" type="ExtensionContext" required>
+  Extension context containing the workspace's Y.Doc
+  
+  <Expandable title="Properties">
+    <ParamField path="ydoc" type="Y.Doc" required>
+      The Yjs document instance for the workspace
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="Extension" type="object">
+  Extension instance with IndexedDB operations
+  
+  <Expandable title="Properties">
+    <ResponseField name="clearData" type="() => Promise<void>">
+      Clear all persisted data from IndexedDB
+    </ResponseField>
+    
+    <ResponseField name="whenReady" type="Promise<void>">
+      Promise that resolves when data is loaded from IndexedDB
+    </ResponseField>
+    
+    <ResponseField name="destroy" type="() => void">
+      Cleanup function to disconnect from IndexedDB
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+### Basic Usage
+
+```typescript
+import { createWorkspace } from '@epicenter/workspace';
+import { indexeddbPersistence } from '@epicenter/workspace/extensions/sync/web';
+
+const workspace = createWorkspace(definition)
+  .withExtension('persistence', indexeddbPersistence);
+```
+
+### How It Works
+
+1. **Database Name**: Uses `ydoc.guid` (workspace ID) as IndexedDB database name
+2. **Auto-Load**: Loads existing state on creation
+3. **Auto-Save**: Saves on every YJS update (handled by `y-indexeddb`)
+4. **Browser Storage**: Data persists across browser sessions
+
+### Storage Location
+
+Data is stored in the browser's IndexedDB:
+
+```
+IndexedDB
+└── blog (database)
+    └── updates (object store)
+        └── [binary YJS updates]
+```
+
+### With Sync Extension
+
+```typescript
+import { createSyncExtension } from '@epicenter/workspace/extensions/sync';
+
+const workspace = createWorkspace(definition)
+  .withExtension('persistence', indexeddbPersistence)
+  .withExtension('sync', createSyncExtension({
+    url: 'ws://localhost:3913/rooms/{id}',
+  }));
+```
+
+### Clear Data
+
+```typescript
+// Clear all persisted data
+await workspace.extensions.persistence.clearData();
+```
+
+## Comparison
+
+<table>
+  <thead>
+    <tr>
+      <th>Feature</th>
+      <th>Filesystem</th>
+      <th>IndexedDB</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>**Platform**</td>
+      <td>Node.js, Bun, Tauri, Electron</td>
+      <td>Browser (Chrome, Firefox, Safari)</td>
+    </tr>
+    <tr>
+      <td>**Storage**</td>
+      <td>Binary `.yjs` file</td>
+      <td>Browser IndexedDB</td>
+    </tr>
+    <tr>
+      <td>**Configuration**</td>
+      <td>Requires `filePath`</td>
+      <td>No config needed</td>
+    </tr>
+    <tr>
+      <td>**Auto-save**</td>
+      <td>Synchronous (writeFileSync)</td>
+      <td>Asynchronous (IndexedDB API)</td>
+    </tr>
+    <tr>
+      <td>**Clear data**</td>
+      <td>Delete file manually</td>
+      <td>`clearData()` method</td>
+    </tr>
+  </tbody>
+</table>
+
+## Advanced Examples
+
+### Conditional Persistence (Desktop)
+
+```typescript
+const dataDir = process.env.DATA_DIR ?? '.epicenter';
+
+const workspace = createWorkspace(definition)
+  .withExtension('persistence', (ctx) =>
+    persistence(ctx, {
+      filePath: join(dataDir, 'persistence', `${ctx.id}.yjs`),
+    })
+  );
+```
+
+### Custom Database Name (IndexedDB)
+
+The database name is automatically set to `ydoc.guid`. To use a custom name, modify the workspace ID:
+
+```typescript
+const workspace = createWorkspace({
+  id: 'custom-db-name', // Used as IndexedDB database name
+  tables: { /* ... */ },
+});
+```
+
+### Standalone Persistence (No Sync)
+
+```typescript
+// Desktop
+const workspace = createWorkspace(definition)
+  .withExtension('persistence', (ctx) =>
+    persistence(ctx, { filePath: './data.yjs' })
+  );
+
+// Browser
+const workspace = createWorkspace(definition)
+  .withExtension('persistence', indexeddbPersistence);
+```
+
+### Migration Between Persistence Types
+
+```typescript
+import * as Y from 'yjs';
+import { Bun } from 'bun';
+
+// Export from IndexedDB (browser console)
+const state = Y.encodeStateAsUpdate(workspace.ydoc);
+const base64 = btoa(String.fromCharCode(...state));
+console.log(base64); // Copy this
+
+// Import to filesystem (Node.js)
+const base64Data = '...';
+const state = new Uint8Array(
+  atob(base64Data).split('').map(c => c.charCodeAt(0))
+);
+await Bun.write('./data.yjs', state);
+```
+
+## Lifecycle & Readiness
+
+### Waiting for Persistence
+
+```typescript
+const workspace = createWorkspace(definition)
+  .withExtension('persistence', indexeddbPersistence);
+
+await workspace.extensions.persistence.whenReady;
+// Data loaded from IndexedDB - safe to query
+
+const posts = workspace.tables.posts.list();
+```
+
+### Extension Ordering
+
+Persistence should be added **before** sync:
+
+```typescript
+// ✅ Correct order
+createWorkspace(definition)
+  .withExtension('persistence', persistence) // 1. Load local data
+  .withExtension('sync', createSyncExtension) // 2. Then sync
+
+// ❌ Wrong order
+createWorkspace(definition)
+  .withExtension('sync', createSyncExtension) // Syncs before local load
+  .withExtension('persistence', persistence)   // Loads after
+```
+
+## setupPersistence (Legacy)
+
+The `setupPersistence` provider is a legacy API that auto-detects the platform:
+
+```typescript
+import { setupPersistence } from '@epicenter/workspace/providers';
+
+const client = createClient(definition.id)
+  .withDefinition(definition)
+  .withExtension('persistence', setupPersistence);
+```
+
+**Behavior**:
+- Browser: Uses IndexedDB
+- Node.js/Bun: Uses filesystem (`.epicenter/persistence/{id}.yjs`)
+
+**Note**: Prefer the explicit `persistence()` or `indexeddbPersistence()` functions for better control.
+
+## Related
+
+- [createSyncExtension()](/api/sync-extension) - WebSocket sync
+- [sqliteProvider()](/api/sqlite-provider) - SQLite materialization
+- [markdownProvider()](/api/markdown-provider) - Markdown files
+- [createWorkspace()](/api/create-client) - Create workspace client

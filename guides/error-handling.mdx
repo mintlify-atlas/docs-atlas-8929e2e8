@@ -1,0 +1,552 @@
+---
+title: Error Handling
+description: Result types, validation errors, and WellCrafted error patterns
+---
+
+Epicenter uses the **Result pattern** from WellCrafted for type-safe error handling. Every operation that can fail returns `Result<T, E>` instead of throwing exceptions.
+
+## Why Result Types?
+
+Result types provide:
+
+- **Type safety**: Compiler forces you to handle errors
+- **No exceptions**: Errors are values, not control flow
+- **Composability**: Chain operations with `map`, `flatMap`, `unwrap`
+- **Better DX**: Clear success/failure paths
+
+<Note>
+  Epicenter uses `wellcrafted` for Result types and tagged errors. All errors include structured context for debugging.
+</Note>
+
+## Basic Result Pattern
+
+### Success: Ok
+
+```typescript
+import { Ok } from 'wellcrafted';
+
+function getPost(id: string) {
+  const post = client.tables.posts.get(id);
+  
+  if (post.status === 'valid') {
+    return Ok(post.row);
+  }
+  
+  return Err({ message: 'Post not found' });
+}
+
+const result = getPost('123');
+if (!result.error) {
+  console.log(result.data.title);
+}
+```
+
+### Error: Err
+
+```typescript
+import { Err } from 'wellcrafted';
+
+function createPost(title: string) {
+  if (!title.trim()) {
+    return Err({ message: 'Title cannot be empty' });
+  }
+  
+  const id = Date.now().toString();
+  client.tables.posts.set({ id, title, _v: 1 });
+  
+  return Ok({ id });
+}
+
+const result = createPost('');
+if (result.error) {
+  console.error(result.error.message);
+}
+```
+
+## Table Operation Results
+
+Table operations return discriminated unions with `status` fields:
+
+### Get Operations
+
+```typescript
+const result = client.tables.posts.get('123');
+
+switch (result.status) {
+  case 'valid':
+    // Row exists and passed validation
+    console.log(result.row.title);
+    break;
+    
+  case 'invalid':
+    // Row exists but failed validation
+    console.error('Validation errors:', result.errors);
+    console.log('Raw data:', result.row);
+    break;
+    
+  case 'not_found':
+    // Row doesn't exist
+    console.log('No post with ID:', result.id);
+    break;
+}
+```
+
+### Update Operations
+
+```typescript
+const result = client.tables.posts.update('123', {
+  title: 'Updated Title',
+});
+
+switch (result.status) {
+  case 'updated':
+    console.log('Success:', result.row);
+    break;
+    
+  case 'invalid':
+    console.error('Validation failed:', result.errors);
+    break;
+    
+  case 'not_found':
+    console.log('Row not found locally');
+    break;
+}
+```
+
+### Delete Operations
+
+```typescript
+const result = client.tables.posts.delete('123');
+
+if (result.status === 'deleted') {
+  console.log('Post deleted');
+} else {
+  console.log('Post not found locally');
+}
+```
+
+## Validation Errors
+
+### Invalid Row Results
+
+When validation fails, you get detailed error information:
+
+```typescript
+const result = client.tables.posts.get('123');
+
+if (result.status === 'invalid') {
+  console.log('Row ID:', result.id);
+  console.log('Raw data:', result.row);
+  
+  for (const error of result.errors) {
+    console.error('Field:', error.path);
+    console.error('Message:', error.message);
+  }
+}
+```
+
+### Get All Invalid Rows
+
+```typescript
+const invalid = client.tables.posts.getAllInvalid();
+
+for (const result of invalid) {
+  console.log(`Row ${result.id} is invalid:`);
+  
+  for (const error of result.errors) {
+    console.log(`  - ${error.path}: ${error.message}`);
+  }
+}
+```
+
+## Tagged Errors
+
+Epicenter uses WellCrafted's tagged errors for structured error handling:
+
+### Extension Errors
+
+```typescript
+import { createTaggedError } from 'wellcrafted/error';
+
+type ExtensionErrorContext = {
+  tableName?: string;
+  rowId?: string;
+  filename?: string;
+  filePath?: string;
+  directory?: string;
+  operation?: string;
+};
+
+export const { ExtensionError, ExtensionErr } = createTaggedError(
+  'ExtensionError'
+).withContext<ExtensionErrorContext | undefined>();
+
+// Usage
+function syncToMarkdown() {
+  try {
+    // ... markdown sync logic
+  } catch (cause) {
+    return Err(
+      ExtensionErr({
+        message: 'Failed to sync to markdown',
+        context: {
+          tableName: 'posts',
+          operation: 'pullToMarkdown',
+        },
+        cause,
+      })
+    );
+  }
+}
+```
+
+### Custom Error Types
+
+```typescript
+import { createTaggedError } from 'wellcrafted/error';
+
+type PostErrorContext = {
+  postId?: string;
+  userId?: string;
+  operation: 'create' | 'update' | 'delete' | 'publish';
+};
+
+const { PostError, PostErr } = createTaggedError('PostError')
+  .withContext<PostErrorContext>();
+
+// Usage
+function publishPost(id: string) {
+  const result = client.tables.posts.get(id);
+  
+  if (result.status !== 'valid') {
+    return Err(
+      PostErr({
+        message: 'Cannot publish invalid post',
+        context: { postId: id, operation: 'publish' },
+      })
+    );
+  }
+  
+  const updated = client.tables.posts.update(id, { published: true });
+  
+  if (updated.status !== 'updated') {
+    return Err(
+      PostErr({
+        message: 'Failed to update post',
+        context: { postId: id, operation: 'publish' },
+      })
+    );
+  }
+  
+  return Ok(updated.row);
+}
+```
+
+## Action Error Handling
+
+Actions use Result types for handlers that can fail:
+
+### Query with Error
+
+```typescript
+import { defineQuery } from '@epicenter/workspace';
+import { type } from 'arktype';
+import { Ok, Err } from 'wellcrafted';
+
+export const getPost = defineQuery({
+  input: type({ id: 'string' }),
+  handler: ({ id }) => {
+    const result = client.tables.posts.get(id);
+    
+    if (result.status === 'valid') {
+      return Ok(result.row);
+    }
+    
+    if (result.status === 'invalid') {
+      return Err({
+        message: 'Post exists but has validation errors',
+        errors: result.errors,
+      });
+    }
+    
+    return Err({ message: 'Post not found' });
+  },
+});
+```
+
+### Mutation with Validation
+
+```typescript
+import { defineMutation } from '@epicenter/workspace';
+import { type } from 'arktype';
+import { Ok, Err } from 'wellcrafted';
+
+export const createPost = defineMutation({
+  input: type({
+    title: 'string',
+    content: 'string | null',
+  }),
+  handler: ({ title, content }) => {
+    // Validate input
+    if (!title.trim()) {
+      return Err({ message: 'Title cannot be empty' });
+    }
+    
+    if (title.length > 200) {
+      return Err({ message: 'Title too long (max 200 characters)' });
+    }
+    
+    // Create post
+    const id = Date.now().toString();
+    client.tables.posts.set({
+      id,
+      title,
+      content,
+      published: false,
+      _v: 1,
+    });
+    
+    return Ok({ id });
+  },
+});
+```
+
+## Error Propagation
+
+Chain operations and propagate errors:
+
+```typescript
+function publishPost(id: string) {
+  // Get post
+  const getResult = client.tables.posts.get(id);
+  if (getResult.status !== 'valid') {
+    return Err({ message: 'Post not found or invalid' });
+  }
+  
+  // Check if already published
+  if (getResult.row.published) {
+    return Err({ message: 'Post already published' });
+  }
+  
+  // Update post
+  const updateResult = client.tables.posts.update(id, {
+    published: true,
+    publishedAt: new Date().toISOString(),
+  });
+  
+  if (updateResult.status !== 'updated') {
+    return Err({ message: 'Failed to update post' });
+  }
+  
+  return Ok(updateResult.row);
+}
+
+// Usage
+const result = publishPost('123');
+if (result.error) {
+  console.error('Failed to publish:', result.error.message);
+} else {
+  console.log('Published:', result.data.title);
+}
+```
+
+## Production Example
+
+Here's a complete error handling pattern from a real application:
+
+```typescript
+import { defineQuery, defineMutation } from '@epicenter/workspace';
+import { type } from 'arktype';
+import { Ok, Err } from 'wellcrafted';
+import { createTaggedError } from 'wellcrafted/error';
+import { client } from './client';
+
+// Define custom error type
+type BlogErrorContext = {
+  postId?: string;
+  userId?: string;
+  operation?: string;
+};
+
+const { BlogError, BlogErr } = createTaggedError('BlogError')
+  .withContext<BlogErrorContext>();
+
+// Query with validation
+export const getPost = defineQuery({
+  input: type({ id: 'string' }),
+  handler: ({ id }) => {
+    const result = client.tables.posts.get(id);
+    
+    switch (result.status) {
+      case 'valid':
+        return Ok(result.row);
+        
+      case 'invalid':
+        return Err(
+          BlogErr({
+            message: 'Post has validation errors',
+            context: { postId: id, operation: 'get' },
+          })
+        );
+        
+      case 'not_found':
+        return Err(
+          BlogErr({
+            message: 'Post not found',
+            context: { postId: id, operation: 'get' },
+          })
+        );
+    }
+  },
+});
+
+// Mutation with complex validation
+export const publishPost = defineMutation({
+  input: type({ id: 'string', userId: 'string' }),
+  handler: ({ id, userId }) => {
+    // Get post
+    const getResult = client.tables.posts.get(id);
+    
+    if (getResult.status !== 'valid') {
+      return Err(
+        BlogErr({
+          message: 'Post not found or invalid',
+          context: { postId: id, userId, operation: 'publish' },
+        })
+      );
+    }
+    
+    // Check authorization
+    if (getResult.row.authorId !== userId) {
+      return Err(
+        BlogErr({
+          message: 'User not authorized to publish this post',
+          context: { postId: id, userId, operation: 'publish' },
+        })
+      );
+    }
+    
+    // Check if already published
+    if (getResult.row.published) {
+      return Err(
+        BlogErr({
+          message: 'Post already published',
+          context: { postId: id, userId, operation: 'publish' },
+        })
+      );
+    }
+    
+    // Update post
+    const updateResult = client.tables.posts.update(id, {
+      published: true,
+      publishedAt: new Date().toISOString(),
+    });
+    
+    if (updateResult.status !== 'updated') {
+      return Err(
+        BlogErr({
+          message: 'Failed to update post',
+          context: { postId: id, userId, operation: 'publish' },
+        })
+      );
+    }
+    
+    return Ok(updateResult.row);
+  },
+});
+
+// Client usage
+const result = await publishPost.handler({ id: '123', userId: 'alice' });
+
+if (result.error) {
+  // Type-safe error handling
+  console.error('Error:', result.error.message);
+  console.error('Context:', result.error.context);
+  
+  // Show user-friendly message
+  if (result.error.context?.operation === 'publish') {
+    alert(`Failed to publish post: ${result.error.message}`);
+  }
+} else {
+  console.log('Published:', result.data.title);
+}
+```
+
+## Best Practices
+
+<Steps>
+  <Step title="Always use Result types for failable operations">
+    ```typescript
+    // Good
+    function getPost(id: string): Result<Post, Error> {
+      const result = client.tables.posts.get(id);
+      if (result.status === 'valid') return Ok(result.row);
+      return Err({ message: 'Not found' });
+    }
+    
+    // Bad
+    function getPost(id: string): Post {
+      const result = client.tables.posts.get(id);
+      if (result.status !== 'valid') throw new Error('Not found');
+      return result.row;
+    }
+    ```
+  </Step>
+
+  <Step title="Use discriminated unions for multiple error types">
+    ```typescript
+    type GetPostError =
+      | { type: 'not_found'; id: string }
+      | { type: 'invalid'; errors: ValidationError[] }
+      | { type: 'unauthorized'; userId: string };
+    
+    function getPost(id: string): Result<Post, GetPostError> {
+      // ...
+    }
+    ```
+  </Step>
+
+  <Step title="Include context in errors">
+    ```typescript
+    return Err(
+      BlogErr({
+        message: 'Failed to create post',
+        context: {
+          userId,
+          operation: 'create',
+          timestamp: new Date().toISOString(),
+        },
+        cause: originalError,
+      })
+    );
+    ```
+  </Step>
+
+  <Step title="Handle all discriminated union cases">
+    ```typescript
+    const result = client.tables.posts.get(id);
+    
+    // Good: Exhaustive handling
+    switch (result.status) {
+      case 'valid': return Ok(result.row);
+      case 'invalid': return Err({ type: 'invalid', errors: result.errors });
+      case 'not_found': return Err({ type: 'not_found', id });
+    }
+    
+    // Bad: Missing cases
+    if (result.status === 'valid') return Ok(result.row);
+    return Err({ message: 'Failed' }); // Loses error details!
+    ```
+  </Step>
+</Steps>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Table Operations" icon="table" href="/guides/table-operations">
+    Learn about validation and observation
+  </Card>
+  <Card title="Defining Workspaces" icon="diagram-project" href="/guides/defining-workspaces">
+    Define schemas with validation
+  </Card>
+</CardGroup>

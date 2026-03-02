@@ -1,0 +1,308 @@
+---
+title: 'createWorkspace()'
+description: 'Create a workspace client with chainable extension support'
+icon: 'plus'
+---
+
+## Overview
+
+The `createWorkspace()` function creates a workspace client that is directly usable AND supports chaining extension and action methods. Single code path with no overloads.
+
+```typescript
+import { createWorkspace } from '@epicenter/workspace';
+```
+
+## Function Signature
+
+<ParamField path="config" type="WorkspaceDefinition<TId, TTableDefinitions, TKvDefinitions, TAwarenessDefinitions>" required>
+  Workspace configuration object or definition from `defineWorkspace()`
+  
+  <Expandable title="Properties">
+    <ParamField path="id" type="string" required>
+      Unique workspace identifier. Used as the Y.Doc GUID.
+      
+      Example: `"my-app"`
+    </ParamField>
+    
+    <ParamField path="tables" type="TableDefinitions">
+      Map of table definitions created via `defineTable()`
+      
+      Example: `{ posts: postsTable, users: usersTable }`
+    </ParamField>
+    
+    <ParamField path="kv" type="KvDefinitions">
+      Map of key-value definitions created via `defineKv()`
+      
+      Example: `{ theme: themeDef, settings: settingsDef }`
+    </ParamField>
+    
+    <ParamField path="awareness" type="AwarenessDefinitions">
+      Map of awareness field schemas for real-time presence
+      
+      Example: `{ cursor: cursorSchema, selection: selectionSchema }`
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="WorkspaceClientBuilder" type="object">
+  A client that IS directly usable AND has chainable builder methods
+  
+  The client includes all workspace properties (id, tables, kv, etc.) plus:
+  - `.withExtension()` - Add workspace-level extensions
+  - `.withDocumentExtension()` - Add document-level extensions
+  - `.withActions()` - Attach action handlers (terminal)
+  
+  See [Client Methods](/api/client-methods) for full client API.
+</ResponseField>
+
+## Basic Usage
+
+### Direct Use (No Extensions)
+
+```typescript
+import { createWorkspace, defineTable } from '@epicenter/workspace';
+import { type } from 'arktype';
+
+const posts = defineTable(
+  type({ id: 'string', title: 'string', _v: '1' })
+);
+
+const client = createWorkspace({
+  id: 'my-app',
+  tables: { posts }
+});
+
+client.tables.posts.set({ id: '1', title: 'Hello', _v: 1 });
+```
+
+### With Reusable Definition
+
+```typescript
+import { defineWorkspace, createWorkspace } from '@epicenter/workspace';
+
+const workspace = defineWorkspace({
+  id: 'my-app',
+  tables: { posts }
+});
+
+const client = createWorkspace(workspace);
+```
+
+## Builder Pattern
+
+### withExtension()
+
+Add workspace-level extensions that operate on the main Y.Doc. Extensions are chainable and build on each other progressively.
+
+<ParamField path="key" type="string" required>
+  Unique name for this extension (used as the key in `client.extensions`)
+</ParamField>
+
+<ParamField path="factory" type="(context: ExtensionContext) => TExports" required>
+  Factory function receiving the workspace context
+  
+  <Expandable title="ExtensionContext">
+    <ResponseField name="id" type="string">
+      Workspace identifier
+    </ResponseField>
+    
+    <ResponseField name="ydoc" type="Y.Doc">
+      The underlying Yjs document
+    </ResponseField>
+    
+    <ResponseField name="tables" type="TablesHelper">
+      Typed table helpers for CRUD operations
+    </ResponseField>
+    
+    <ResponseField name="kv" type="KvHelper">
+      Typed key-value helpers
+    </ResponseField>
+    
+    <ResponseField name="awareness" type="AwarenessHelper">
+      Typed awareness helpers for presence
+    </ResponseField>
+    
+    <ResponseField name="extensions" type="Record<string, unknown>">
+      Previously added extensions (typed access)
+    </ResponseField>
+    
+    <ResponseField name="whenReady" type="Promise<void>">
+      Composite promise from all prior extensions
+    </ResponseField>
+  </Expandable>
+  
+  <Expandable title="Factory Return">
+    Return a flat object with custom exports and optional lifecycle hooks:
+    
+    <ResponseField name="...exports" type="any">
+      Custom properties and methods for your extension
+    </ResponseField>
+    
+    <ResponseField name="whenReady" type="Promise<unknown>">
+      Optional: Promise resolving when extension is ready
+    </ResponseField>
+    
+    <ResponseField name="destroy" type="() => void | Promise<void>">
+      Optional: Cleanup function called on workspace destroy
+    </ResponseField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="WorkspaceClientBuilder" type="object">
+  New builder with the extension's exports added to `.extensions[key]`
+</ResponseField>
+
+#### Example: Persistence Extension
+
+```typescript
+import { IndexeddbPersistence } from 'y-indexeddb';
+
+const client = createWorkspace({ id: 'my-app', tables: { posts } })
+  .withExtension('persistence', ({ ydoc }) => {
+    const idb = new IndexeddbPersistence(ydoc.guid, ydoc);
+    return {
+      clearData: () => idb.clearData(),
+      whenReady: idb.whenSynced,
+      destroy: () => idb.destroy()
+    };
+  });
+
+// Access extension exports
+await client.extensions.persistence.whenReady;
+client.extensions.persistence.clearData();
+```
+
+#### Example: Chained Extensions
+
+```typescript
+const client = createWorkspace({ id: 'my-app', tables: { posts } })
+  .withExtension('persistence', indexeddbPersistence)
+  .withExtension('sync', ({ whenReady, extensions }) => {
+    // Wait for persistence before syncing
+    await whenReady;
+    
+    // Access prior extension
+    extensions.persistence.clearData();
+    
+    return ySweetSync({ auth: directAuth('token') });
+  });
+```
+
+### withDocumentExtension()
+
+Register extensions that fire when content Y.Docs are opened via table document managers. Separate lifecycle from workspace extensions.
+
+<ParamField path="key" type="string" required>
+  Unique name for this document extension (independent namespace)
+</ParamField>
+
+<ParamField path="factory" type="(context: DocumentContext) => TExports" required>
+  Factory function receiving the document context
+  
+  <Expandable title="DocumentContext">
+    <ResponseField name="id" type="string">
+      Workspace identifier
+    </ResponseField>
+    
+    <ResponseField name="ydoc" type="Y.Doc">
+      The content Y.Doc being opened
+    </ResponseField>
+    
+    <ResponseField name="whenReady" type="Promise<void>">
+      Composite promise from all prior document extensions
+    </ResponseField>
+    
+    <ResponseField name="extensions" type="Record<string, Extension | undefined>">
+      Prior document extensions (optional because of tag filtering)
+    </ResponseField>
+  </Expandable>
+</ParamField>
+
+<ParamField path="options" type="{ tags?: string[] }">
+  Optional tag filter for targeting specific document types
+  
+  If provided, extension fires only for documents whose tags share at least one value (set intersection)
+</ParamField>
+
+<ResponseField name="WorkspaceClientBuilder" type="object">
+  New builder with the document extension registered
+</ResponseField>
+
+#### Example: Document Persistence
+
+```typescript
+const client = createWorkspace({ id: 'app', tables: { notes } })
+  .withExtension('persistence', workspacePersistence)
+  .withDocumentExtension('persistence', ({ ydoc }) => {
+    const idb = new IndexeddbPersistence(ydoc.guid, ydoc);
+    return {
+      clearData: () => idb.clearData(),
+      whenReady: idb.whenSynced,
+      destroy: () => idb.destroy()
+    };
+  }, { tags: ['persistent'] });
+```
+
+### withActions()
+
+Attach action handlers to the workspace client. This is **terminal** - no more chaining after calling this method.
+
+<ParamField path="factory" type="(client: WorkspaceClient) => TActions" required>
+  Factory function receiving the finalized client, returns an actions map
+  
+  Actions should be created using `defineMutation()` or `defineQuery()`
+</ParamField>
+
+<ResponseField name="WorkspaceClientWithActions" type="object">
+  Client with actions attached (no more builder methods available)
+  
+  Access actions via `client.actions.actionName`
+</ResponseField>
+
+#### Example: Action Map
+
+```typescript
+import { defineMutation } from '@epicenter/workspace';
+
+const client = createWorkspace({ id: 'my-app', tables: { posts } })
+  .withExtension('persistence', indexeddbPersistence)
+  .withActions((client) => ({
+    createPost: defineMutation({
+      input: type({ title: 'string', body: 'string' }),
+      run: ({ input }) => {
+        const id = generateId();
+        client.tables.posts.set({ id, ...input, _v: 1 });
+        return { id };
+      }
+    }),
+    
+    deletePost: defineMutation({
+      input: type({ id: 'string' }),
+      run: ({ input }) => {
+        client.tables.posts.delete(input.id);
+      }
+    })
+  }));
+
+// Use actions
+client.actions.createPost({ title: 'Hello', body: 'World' });
+```
+
+## Design Rationale
+
+### Why Extensions Are Chainable
+
+Extensions use chainable `.withExtension(key, factory)` calls instead of a single map because **extensions build on each other progressively**. Each factory receives the accumulated extensions-so-far as typed context, enabling extension N+1 to access extension N's exports.
+
+### Why Actions Use a Map
+
+Actions use a single `.withActions(factory)` call because:
+- Actions are always defined by the app author (not imported)
+- Actions don't build on each other
+- Declaring all actions in one place is more ergonomic
+
+## Related
+
+- [Client Methods](/api/client-methods) - Full client API reference
+- [defineWorkspace()](/api/define-workspace) - Create reusable definitions
+- [Schema Types](/api/column-types) - Define table schemas

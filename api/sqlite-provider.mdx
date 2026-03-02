@@ -1,0 +1,187 @@
+---
+title: 'sqliteProvider()'
+description: 'SQL query capabilities via Drizzle ORM for Epicenter workspaces'
+icon: 'database'
+---
+
+## Overview
+
+The `sqliteProvider()` function creates a SQLite extension that syncs workspace data to a SQLite database and provides SQL query capabilities via Drizzle ORM.
+
+```typescript
+import { sqliteProvider } from '@epicenter/workspace';
+```
+
+## Function Signature
+
+<ParamField path="context" type="ExtensionContext" required>
+  Extension context containing the workspace's Y.Doc and other metadata
+  
+  <Expandable title="Properties">
+    <ParamField path="ydoc" type="Y.Doc" required>
+      The Yjs document instance for the workspace
+    </ParamField>
+    
+    <ParamField path="id" type="string" required>
+      The workspace ID
+    </ParamField>
+    
+    <ParamField path="awareness" type="Awareness" required>
+      The workspace awareness instance
+    </ParamField>
+    
+    <ParamField path="whenReady" type="Promise<void>" required>
+      Promise that resolves when all prior extensions are ready
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="Extension" type="object">
+  Extension instance with SQLite query capabilities and Drizzle table references
+  
+  <Expandable title="Properties">
+    <ResponseField name="pullToSqlite" type="Query">
+      Sync all data from YJS to SQLite (replace all)
+    </ResponseField>
+    
+    <ResponseField name="pushFromSqlite" type="Query">
+      Sync all data from SQLite to YJS (replace all)
+    </ResponseField>
+    
+    <ResponseField name="db" type="BetterSQLite3Database">
+      Drizzle database instance for direct SQL access
+    </ResponseField>
+    
+    <ResponseField name="[tableName]" type="DrizzleTable">
+      Each workspace table is available as a Drizzle table reference (e.g., `posts`, `users`)
+    </ResponseField>
+    
+    <ResponseField name="whenReady" type="Promise<void>">
+      Promise that resolves when the extension is ready
+    </ResponseField>
+    
+    <ResponseField name="destroy" type="() => void">
+      Cleanup function to disconnect and close the database
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## Storage Locations
+
+The SQLite provider stores files in the following locations:
+
+- **Database**: `.epicenter/providers/sqlite/{workspaceId}.db`
+- **Logs**: `.epicenter/providers/sqlite/logs/{workspaceId}.log`
+
+## Basic Usage
+
+### Setup with createWorkspace
+
+```typescript
+import { createWorkspace, sqliteProvider } from '@epicenter/workspace';
+
+const workspace = createWorkspace(definition)
+  .withExtension('sqlite', (c) => sqliteProvider(c));
+```
+
+### Query with Drizzle ORM
+
+```typescript
+import { eq, desc, count, avg } from '@epicenter/workspace';
+
+const blogActions = {
+  getPublishedPosts: defineQuery({
+    handler: async () => {
+      const { sqlite } = workspace.extensions;
+      return await sqlite.posts
+        .select()
+        .where(eq(sqlite.posts.published, true))
+        .orderBy(desc(sqlite.posts.publishedAt))
+        .limit(10);
+    },
+  }),
+
+  getPostStats: defineQuery({
+    handler: async () => {
+      const { sqlite } = workspace.extensions;
+      return await sqlite.posts
+        .select({
+          category: sqlite.posts.category,
+          total: count(),
+          avgViews: avg(sqlite.posts.views),
+        })
+        .groupBy(sqlite.posts.category);
+    },
+  }),
+};
+```
+
+## Advanced Features
+
+### Manual Sync Operations
+
+You can manually trigger sync operations between YJS and SQLite:
+
+```typescript
+const blogActions = {
+  syncToSqlite: defineMutation({
+    handler: () => workspace.extensions.sqlite.pullToSqlite(),
+  }),
+  
+  syncFromSqlite: defineMutation({
+    handler: () => workspace.extensions.sqlite.pushFromSqlite(),
+  }),
+};
+```
+
+### Direct Database Access
+
+Access the raw Drizzle database instance for custom queries:
+
+```typescript
+const { db } = workspace.extensions.sqlite;
+
+// Raw SQL query
+const result = await db.execute('SELECT * FROM posts WHERE published = true');
+```
+
+## How It Works
+
+1. **Automatic Sync**: Observes YJS changes and updates SQLite automatically
+2. **WAL Mode**: Uses Write-Ahead Logging for concurrent access
+3. **Loop Prevention**: Prevents infinite loops with sync coordination flags
+4. **Error Logging**: Logs validation errors without blocking sync
+5. **Initial Sync**: Performs full sync on startup to ensure consistency
+6. **Schema Mapping**: Automatically creates SQLite tables matching your workspace schema
+
+## Type Safety
+
+The SQLite provider is fully typed based on your workspace definition:
+
+```typescript
+const definition = defineWorkspace({
+  id: 'blog',
+  tables: {
+    posts: {
+      id: id(),
+      title: text(),
+      published: boolean({ default: false }),
+    },
+  },
+});
+
+const workspace = createWorkspace(definition)
+  .withExtension('sqlite', sqliteProvider);
+
+// ✅ Fully typed - editor autocomplete works
+workspace.extensions.sqlite.posts.select();
+
+// ❌ Type error - 'articles' doesn't exist
+workspace.extensions.sqlite.articles.select();
+```
+
+## Related
+
+- [createWorkspace()](/api/create-client) - Create workspace client
+- [markdownProvider()](/api/markdown-provider) - Markdown file persistence
+- [Table Operations](/api/table-operations) - CRUD operations

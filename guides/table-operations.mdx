@@ -1,0 +1,384 @@
+---
+title: Table Operations
+description: CRUD operations, upsert vs update, validation, and observation patterns
+---
+
+Epicenter tables provide type-safe CRUD operations with automatic validation and real-time observation. All operations work directly with YJS CRDTs for conflict-free collaborative editing.
+
+## Core Concepts
+
+Every table operation:
+
+- Returns discriminated union results with `status` fields
+- Validates data against your ArkType schema
+- Supports real-time observation for reactive UIs
+- Works offline-first with automatic sync
+
+<Note>
+  Tables use Last-Writer-Wins (LWW) semantics at the row level. When two peers modify the same row, the most recent timestamp wins.
+</Note>
+
+## Write Operations
+
+### Set vs Update
+
+Understanding the difference between `set()` and `update()` is critical:
+
+<CodeGroup>
+```typescript set() - Always succeeds
+// set() creates OR replaces the entire row
+// ALWAYS succeeds, never fails
+client.tables.posts.set({
+  id: '1',
+  title: 'Hello World',
+  content: 'Complete row data',
+  published: false,
+  _v: 1,
+});
+
+// Overwrites the entire row
+client.tables.posts.set({
+  id: '1',
+  title: 'Updated Title',
+  content: null,  // Previous content is lost!
+  published: true,
+  _v: 1,
+});
+```
+
+```typescript update() - Partial merge
+// update() merges fields into existing row
+// No-op if row doesn't exist locally
+const result = client.tables.posts.update('1', {
+  title: 'Updated Title',
+  // Other fields remain unchanged
+});
+
+if (result.status === 'updated') {
+  console.log('Row updated:', result.row);
+} else if (result.status === 'not_found') {
+  console.log('Row not found locally');
+} else if (result.status === 'invalid') {
+  console.log('Validation failed:', result.errors);
+}
+```
+</CodeGroup>
+
+<Warning>
+  `update()` is a no-op if the row doesn't exist locally. This prevents data loss in CRDT scenarios where creating a new row might overwrite data from another peer.
+</Warning>
+
+### Batch Operations
+
+Use `batch()` to group multiple operations into a single transaction:
+
+```typescript
+client.batch(() => {
+  client.tables.posts.set({ id: '1', title: 'First', _v: 1 });
+  client.tables.posts.set({ id: '2', title: 'Second', _v: 1 });
+  client.tables.posts.set({ id: '3', title: 'Third', _v: 1 });
+});
+
+// Observers fire once with all three IDs
+// Much more efficient than three separate operations
+```
+
+## Read Operations
+
+All read operations return discriminated unions for type-safe error handling.
+
+### Get Single Row
+
+```typescript
+const result = client.tables.posts.get('1');
+
+switch (result.status) {
+  case 'valid':
+    console.log('Row found:', result.row.title);
+    break;
+    
+  case 'invalid':
+    console.error('Validation failed:', result.errors);
+    console.log('Raw data:', result.row);
+    break;
+    
+  case 'not_found':
+    console.log('No row with ID:', result.id);
+    break;
+}
+```
+
+### Get All Rows
+
+<CodeGroup>
+```typescript getAll() - All rows
+// Returns array of RowResult (valid + invalid)
+const results = client.tables.posts.getAll();
+
+for (const result of results) {
+  if (result.status === 'valid') {
+    console.log(result.row.title);
+  } else {
+    console.log('Invalid row:', result.id);
+  }
+}
+```
+
+```typescript getAllValid() - Valid only
+// Returns array of valid rows only
+const posts = client.tables.posts.getAllValid();
+
+// Type: Array<{ id: string, title: string, ... }>
+for (const post of posts) {
+  console.log(post.title);
+}
+```
+
+```typescript getAllInvalid() - Invalid only
+// Returns validation errors for invalid rows
+const invalid = client.tables.posts.getAllInvalid();
+
+for (const error of invalid) {
+  console.log(`Row ${error.id} failed validation:`);
+  console.log(error.errors);
+}
+```
+</CodeGroup>
+
+### Query Operations
+
+<CodeGroup>
+```typescript filter() - Multiple matches
+// Returns all valid rows matching predicate
+const published = client.tables.posts.filter(
+  (row) => row.published === true
+);
+
+const recentPosts = client.tables.posts.filter(
+  (row) => row.date && new Date(row.date) > lastWeek
+);
+```
+
+```typescript find() - First match
+// Returns first valid row matching predicate
+const firstDraft = client.tables.posts.find(
+  (row) => row.published === false
+);
+
+if (firstDraft) {
+  console.log('Found draft:', firstDraft.title);
+} else {
+  console.log('No drafts found');
+}
+```
+
+```typescript has() - Existence check
+// Check if row exists (no validation)
+if (client.tables.posts.has('123')) {
+  console.log('Post exists');
+}
+```
+
+```typescript count() - Total rows
+// Get total row count (includes invalid)
+const total = client.tables.posts.count();
+console.log(`Total posts: ${total}`);
+```
+</CodeGroup>
+
+## Delete Operations
+
+<CodeGroup>
+```typescript delete() - Single row
+const result = client.tables.posts.delete('123');
+
+if (result.status === 'deleted') {
+  console.log('Post deleted');
+} else {
+  console.log('Post not found locally');
+}
+```
+
+```typescript clear() - All rows
+// Delete all rows in the table
+client.tables.posts.clear();
+```
+</CodeGroup>
+
+## Real-Time Observation
+
+Observe table changes for reactive UIs. Observers fire once per transaction with all changed IDs.
+
+### Basic Observer
+
+```typescript
+const unsubscribe = client.tables.posts.observe((changedIds, transaction) => {
+  console.log('Changed IDs:', Array.from(changedIds));
+  
+  for (const id of changedIds) {
+    const result = client.tables.posts.get(id);
+    
+    if (result.status === 'valid') {
+      console.log(`Post ${id} changed:`, result.row.title);
+    } else if (result.status === 'not_found') {
+      console.log(`Post ${id} deleted`);
+    }
+  }
+});
+
+// Stop observing
+unsubscribe();
+```
+
+### Observer with Cache Updates
+
+```typescript
+const cache = new Map<string, Post>();
+
+const unsubscribe = client.tables.posts.observe((changedIds) => {
+  for (const id of changedIds) {
+    const result = client.tables.posts.get(id);
+    
+    if (result.status === 'valid') {
+      // Update cache
+      cache.set(id, result.row);
+    } else if (result.status === 'not_found') {
+      // Remove from cache
+      cache.delete(id);
+    }
+  }
+  
+  // Trigger UI update
+  renderUI(Array.from(cache.values()));
+});
+```
+
+### Batched Observer
+
+```typescript
+// This observer fires ONCE for the batch
+const unsubscribe = client.tables.posts.observe((changedIds) => {
+  console.log(`Batch update: ${changedIds.size} rows changed`);
+});
+
+client.batch(() => {
+  client.tables.posts.set({ id: '1', title: 'First', _v: 1 });
+  client.tables.posts.set({ id: '2', title: 'Second', _v: 1 });
+  client.tables.posts.set({ id: '3', title: 'Third', _v: 1 });
+});
+// Observer fires once with changedIds = Set(['1', '2', '3'])
+```
+
+<Tip>
+  Observers intentionally don't include row data to avoid unnecessary reconstruction. Call `get(id)` only when you need the data.
+</Tip>
+
+## Validation Behavior
+
+### Handling Invalid Data
+
+Epicenter gracefully handles invalid data from corrupt files or schema evolution:
+
+```typescript
+// Insert valid data
+client.tables.posts.set({
+  id: '1',
+  title: 'Valid Post',
+  content: 'Hello',
+  _v: 1,
+});
+
+// Simulate corrupt data (wrong type)
+client.ydoc.transact(() => {
+  const ykv = /* access internal YKeyValue */;
+  ykv.set('2', { id: '2', title: 123, _v: 1 }); // title should be string
+});
+
+const results = client.tables.posts.getAll();
+console.log(results.length); // 2
+
+const valid = client.tables.posts.getAllValid();
+console.log(valid.length); // 1 (only valid row)
+
+const invalid = client.tables.posts.getAllInvalid();
+console.log(invalid.length); // 1
+console.log(invalid[0].errors); // Validation errors
+```
+
+### Update with Validation
+
+```typescript
+const result = client.tables.posts.update('1', {
+  title: 'New Title',
+  published: true,
+});
+
+if (result.status === 'updated') {
+  console.log('Success:', result.row);
+} else if (result.status === 'invalid') {
+  console.error('Validation failed after merge:');
+  for (const error of result.errors) {
+    console.error(error.message);
+  }
+} else if (result.status === 'not_found') {
+  console.log('Row not found locally');
+}
+```
+
+## Production Example
+
+Here's a real-world pattern from the Reddit workspace:
+
+```typescript
+import { createWorkspace } from '@epicenter/workspace';
+import { redditWorkspace } from './workspace';
+
+const client = createWorkspace(redditWorkspace);
+
+// Observe all post changes
+const unsubscribe = client.tables.posts.observe((changedIds) => {
+  const validPosts = [];
+  const errors = [];
+  
+  for (const id of changedIds) {
+    const result = client.tables.posts.get(id);
+    
+    if (result.status === 'valid') {
+      validPosts.push(result.row);
+    } else if (result.status === 'invalid') {
+      errors.push({ id, errors: result.errors });
+    }
+  }
+  
+  if (errors.length > 0) {
+    console.error('Validation errors:', errors);
+  }
+  
+  // Update UI with valid posts only
+  updatePostsUI(validPosts);
+});
+
+// Batch import from CSV
+client.batch(() => {
+  for (const row of csvData) {
+    client.tables.posts.set({
+      id: row.id,
+      title: row.title,
+      content: row.body,
+      subreddit: row.subreddit,
+      _v: 1,
+    });
+  }
+});
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="SQLite Queries" icon="database" href="/guides/sqlite-queries">
+    Use Drizzle ORM for complex SQL queries
+  </Card>
+  <Card title="Error Handling" icon="triangle-exclamation" href="/guides/error-handling">
+    Handle Result types and validation errors
+  </Card>
+</CardGroup>

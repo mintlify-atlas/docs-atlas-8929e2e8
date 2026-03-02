@@ -1,0 +1,367 @@
+---
+title: 'defineQuery()'
+description: 'Define read operations with full type inference'
+---
+
+## Overview
+
+Defines a query (read operation) with full type inference. Returns a callable function with metadata properties (`type`, `input`, `description`).
+
+Queries are idempotent operations that read data without side effects. When exposed via the server adapter, queries map to HTTP GET requests.
+
+<Note>
+  The returned action **is** the function — call it directly. There is no `.handler` property.
+</Note>
+
+## Signature
+
+```typescript
+// Without input
+function defineQuery<TOutput = unknown>(
+  config: ActionConfig<undefined, TOutput>
+): Query<undefined, TOutput>
+
+// With input schema
+function defineQuery<TInput extends TSchema, TOutput = unknown>(
+  config: ActionConfig<TInput, TOutput>
+): Query<TInput, TOutput>
+```
+
+## Parameters
+
+<ParamField path="config" type="object" required>
+  Configuration object for the query definition
+  
+  <Expandable title="properties">
+    <ParamField path="config.handler" type="function" required>
+      The query implementation. Handlers close over their dependencies (client, tables, extensions) and have signature `(input?) => output`. Returns `TOutput` or `Promise<TOutput>` for async operations.
+    </ParamField>
+    
+    <ParamField path="config.input" type="TSchema">
+      Optional Standard Schema for validating and typing input. When provided, the handler receives typed and validated input. Supports ArkType, Zod v4.2+, Valibot, and other Standard Schema implementations.
+    </ParamField>
+    
+    <ParamField path="config.description" type="string">
+      Human-readable description for introspection and documentation
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+## Return Value
+
+Returns a `Query<TInput, TOutput>` — a callable function with metadata properties:
+
+<ResponseField name="type" type="'query'" required>
+  Discriminator property, always set to `'query'`
+</ResponseField>
+
+<ResponseField name="input" type="TSchema">
+  The input schema if provided during definition
+</ResponseField>
+
+<ResponseField name="description" type="string">
+  The description if provided during definition
+</ResponseField>
+
+## Closure-Based Design
+
+Handlers capture their dependencies (client, tables, extensions) via closure instead of receiving context as a parameter. This means:
+
+- Define queries **after** creating the client they depend on
+- Dependencies are accessed through closure, not as parameters
+- No type annotations needed — TypeScript infers everything naturally
+- Standard JavaScript closure mechanics, not framework magic
+
+## Examples
+
+### Query without input
+
+```typescript
+import { createWorkspace, defineQuery } from '@epicenter/workspace';
+import { type } from 'arktype';
+
+// Step 1: Create client
+const client = createWorkspace({
+  id: 'blog',
+  tables: {
+    posts: defineTable(type({ 
+      id: 'string', 
+      title: 'string',
+      _v: '1'
+    }))
+  }
+});
+
+// Step 2: Define query that closes over client
+const getAllPosts = defineQuery({
+  description: 'Get all posts',
+  handler: () => client.tables.posts.getAllValid(),
+});
+
+// Step 3: Use it
+const posts = getAllPosts();    // call directly
+console.log(getAllPosts.type);  // 'query'
+```
+
+### Query with input schema
+
+```typescript
+import { type } from 'arktype';
+
+const getPost = defineQuery({
+  description: 'Get post by ID',
+  input: type({ id: 'string' }),
+  handler: ({ id }) => {  // input is typed as { id: string }
+    const post = client.tables.posts.get(id);
+    if (!post) throw new Error('Post not found');
+    return post;
+  },
+});
+
+// Usage
+const post = getPost({ id: '123' });
+```
+
+### Async query
+
+```typescript
+const searchPosts = defineQuery({
+  description: 'Search posts by keyword',
+  input: type({ keyword: 'string' }),
+  handler: async ({ keyword }) => {
+    // Simulate async search
+    await new Promise(resolve => setTimeout(resolve, 100));
+    return client.tables.posts
+      .getAllValid()
+      .filter(p => p.title.includes(keyword));
+  },
+});
+
+// Usage with await
+const results = await searchPosts({ keyword: 'typescript' });
+```
+
+### Query with Standard Schema validation
+
+```typescript
+import { type } from 'arktype';
+
+// ArkType provides runtime validation
+const getPaginatedPosts = defineQuery({
+  description: 'Get paginated posts',
+  input: type({
+    page: 'number>0',           // Validates page > 0
+    limit: 'number>=1<=100',    // Validates 1 <= limit <= 100
+  }),
+  handler: ({ page, limit }) => {
+    const posts = client.tables.posts.getAllValid();
+    const start = (page - 1) * limit;
+    return posts.slice(start, start + limit);
+  },
+});
+
+// Invalid input throws validation error
+try {
+  getPaginatedPosts({ page: 0, limit: 200 });
+} catch (error) {
+  // Validation error: page must be > 0, limit must be <= 100
+}
+```
+
+### Query with complex input types
+
+```typescript
+import { type } from 'arktype';
+
+const filterPosts = defineQuery({
+  description: 'Filter posts with multiple criteria',
+  input: type({
+    status: "'draft' | 'published' | 'archived'",
+    author: 'string?',      // Optional
+    tags: 'string[]',       // Array of strings
+    createdAfter: 'Date?',  // Optional date
+  }),
+  handler: (filters) => {
+    let posts = client.tables.posts.getAllValid();
+    
+    // filters.status is typed as 'draft' | 'published' | 'archived'
+    posts = posts.filter(p => p.status === filters.status);
+    
+    // filters.author is typed as string | undefined
+    if (filters.author) {
+      posts = posts.filter(p => p.author === filters.author);
+    }
+    
+    return posts;
+  },
+});
+```
+
+### Organizing queries in namespaces
+
+```typescript
+const actions = {
+  posts: {
+    getAll: defineQuery({
+      handler: () => client.tables.posts.getAllValid(),
+    }),
+    getById: defineQuery({
+      input: type({ id: 'string' }),
+      handler: ({ id }) => client.tables.posts.get(id),
+    }),
+    search: defineQuery({
+      input: type({ keyword: 'string' }),
+      handler: ({ keyword }) => client.tables.posts
+        .getAllValid()
+        .filter(p => p.title.includes(keyword)),
+    }),
+  },
+  users: {
+    profile: {
+      get: defineQuery({
+        handler: () => client.tables.users.getCurrentProfile(),
+      }),
+    },
+  },
+};
+
+// Usage
+const posts = actions.posts.getAll();
+const post = actions.posts.getById({ id: '123' });
+const profile = actions.users.profile.get();
+```
+
+## Standard Schema Support
+
+The `input` parameter accepts any Standard Schema implementation:
+
+<Tabs>
+  <Tab title="ArkType">
+    ```typescript
+    import { type } from 'arktype';
+
+    defineQuery({
+      input: type({ email: 'email', age: 'number>=18' }),
+      handler: ({ email, age }) => {
+        // Validated at runtime
+      },
+    });
+    ```
+  </Tab>
+  
+  <Tab title="Zod">
+    ```typescript
+    import * as z from 'zod';
+
+    defineQuery({
+      input: z.object({
+        email: z.string().email(),
+        age: z.number().min(18),
+      }),
+      handler: ({ email, age }) => {
+        // Validated at runtime
+      },
+    });
+    ```
+  </Tab>
+  
+  <Tab title="Valibot">
+    ```typescript
+    import * as v from 'valibot';
+
+    defineQuery({
+      input: v.object({
+        email: v.pipe(v.string(), v.email()),
+        age: v.pipe(v.number(), v.minValue(18)),
+      }),
+      handler: ({ email, age }) => {
+        // Validated at runtime
+      },
+    });
+    ```
+  </Tab>
+</Tabs>
+
+## JSON Schema Generation
+
+Schemas are automatically converted to JSON Schema for API documentation and OpenAPI specs:
+
+```typescript
+import { standardSchemaToJsonSchema } from '@epicenter/workspace';
+import { type } from 'arktype';
+
+const query = defineQuery({
+  input: type({ name: 'string', count: 'number' }),
+  handler: ({ name, count }) => { /* ... */ },
+});
+
+if (query.input) {
+  const jsonSchema = standardSchemaToJsonSchema(query.input);
+  // {
+  //   type: 'object',
+  //   properties: {
+  //     name: { type: 'string' },
+  //     count: { type: 'number' }
+  //   },
+  //   required: ['name', 'count']
+  // }
+}
+```
+
+<Warning>
+  **JSON Schema Limitations**: Some advanced type features cannot be represented in JSON Schema:
+  
+  - Morphs and transformations (e.g., `type('string').pipe(s => s.toUpperCase())`)
+  - Custom predicates (e.g., `type('string').narrow(s => s.startsWith('x'))`)
+  - Prototype-based types (e.g., `Date`, `RegExp` instances)
+  
+  These types will use fallback handlers during conversion. The conversion preserves as much of the schema as possible, with warnings logged for unconvertible parts.
+</Warning>
+
+## Type Inference
+
+TypeScript infers all types automatically:
+
+```typescript
+import { type } from 'arktype';
+
+// No type annotations needed!
+const getUser = defineQuery({
+  input: type({ id: 'string' }),
+  handler: ({ id }) => {
+    // id is inferred as string
+    return client.tables.users.get(id);
+  },
+});
+
+// Return type is inferred from handler
+type User = Awaited<ReturnType<typeof getUser>>;
+// User is inferred from what client.tables.users.get() returns
+```
+
+## Using with Adapters
+
+Queries integrate seamlessly with Epicenter adapters:
+
+```typescript
+import { createActionsRouter } from '@epicenter/server';
+import { createCLI } from '@epicenter/cli';
+
+const actions = {
+  posts: {
+    getAll: defineQuery({ handler: () => client.tables.posts.getAllValid() }),
+  },
+};
+
+// Server adapter: maps to HTTP GET /posts/getAll
+createActionsRouter({ client, actions });
+
+// CLI adapter: maps to command `posts:getAll`
+createCLI({ client, actions });
+```
+
+## Related
+
+- [defineMutation()](/api/define-mutation) - Define write operations
+- [Action Types](/api/action-types) - Type guards and introspection
+- [Actions Concept](/concepts/actions) - Understanding the action system

@@ -1,0 +1,512 @@
+---
+title: Table Operations
+description: CRUD operations and methods for workspace tables
+icon: "table"
+---
+
+## Overview
+
+Every table in a workspace provides a complete set of CRUD operations with schema validation and automatic migration. All operations are type-safe and validated at runtime.
+
+## Accessing Tables
+
+```typescript
+import { createWorkspace, defineTable } from '@epicenter/workspace';
+import { type } from 'arktype';
+
+const posts = defineTable(
+  type({ id: 'string', title: 'string', content: 'string', _v: '1' })
+);
+
+const client = createWorkspace({ id: 'app', tables: { posts } });
+
+// Access table operations
+client.tables.posts.set(...);
+client.tables.posts.get(...);
+```
+
+## Write Operations
+
+### set
+
+Set a row (insert or replace). Always writes the full row.
+
+```typescript
+set(row: TRow): void
+```
+
+<ParamField path="row" type="TRow" required>
+  The complete row to write (must include `id` and `_v`)
+</ParamField>
+
+**Example:**
+
+```typescript
+client.tables.posts.set({
+  id: '1',
+  title: 'Hello World',
+  content: 'This is my first post',
+  _v: 1
+});
+```
+
+<Note>
+There is no runtime validation on write - TypeScript enforces the shape. Invalid data will fail validation when read.
+</Note>
+
+### update
+
+Partial update of a row by ID. Reads the current row, merges the partial fields, validates, and writes it back.
+
+```typescript
+update(
+  id: string, 
+  partial: Partial<Omit<TRow, 'id'>>
+): UpdateResult<TRow>
+```
+
+<ParamField path="id" type="string" required>
+  The row ID to update
+</ParamField>
+
+<ParamField path="partial" type="Partial<Omit<TRow, 'id'>>" required>
+  Fields to merge (all fields except `id` are optional)
+</ParamField>
+
+<ResponseField name="UpdateResult" type="union">
+  <Expandable title="variants">
+    <ResponseField name="success" type="{ status: 'updated', row: TRow }">
+      Update succeeded, returns the updated row
+    </ResponseField>
+    
+    <ResponseField name="not_found" type="{ status: 'not_found', id: string, row: undefined }">
+      Row doesn't exist
+    </ResponseField>
+    
+    <ResponseField name="invalid" type="{ status: 'invalid', id: string, errors: Issue[], row: unknown }">
+      Merged result failed validation
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+**Example:**
+
+```typescript
+const result = client.tables.posts.update('1', { 
+  title: 'Updated Title' 
+});
+
+if (result.status === 'updated') {
+  console.log('Updated:', result.row);
+} else if (result.status === 'not_found') {
+  console.log('Post not found');
+} else {
+  console.log('Validation failed:', result.errors);
+}
+```
+
+## Read Operations
+
+### get
+
+Get a single row by ID.
+
+```typescript
+get(id: string): GetResult<TRow>
+```
+
+<ParamField path="id" type="string" required>
+  The row ID to look up
+</ParamField>
+
+<ResponseField name="GetResult" type="union">
+  <Expandable title="variants">
+    <ResponseField name="valid" type="{ status: 'valid', row: TRow }">
+      Row exists and passes schema validation
+    </ResponseField>
+    
+    <ResponseField name="invalid" type="{ status: 'invalid', id: string, errors: Issue[], row: unknown }">
+      Row exists but fails validation
+    </ResponseField>
+    
+    <ResponseField name="not_found" type="{ status: 'not_found', id: string, row: undefined }">
+      Row doesn't exist
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+**Example:**
+
+```typescript
+const result = client.tables.posts.get('1');
+
+if (result.status === 'valid') {
+  console.log(result.row.title);
+} else if (result.status === 'not_found') {
+  console.log('Post not found');
+} else {
+  console.log('Invalid data:', result.errors);
+}
+```
+
+### getAll
+
+Get all rows with their validation status.
+
+```typescript
+getAll(): RowResult<TRow>[]
+```
+
+<ResponseField name="RowResult[]" type="array">
+  Array of results, each either `{ status: 'valid', row }` or `{ status: 'invalid', id, errors, row }`
+</ResponseField>
+
+**Example:**
+
+```typescript
+const results = client.tables.posts.getAll();
+
+for (const result of results) {
+  if (result.status === 'valid') {
+    console.log(result.row.title);
+  } else {
+    console.log('Invalid row:', result.id, result.errors);
+  }
+}
+```
+
+### getAllValid
+
+Get all rows that pass schema validation.
+
+```typescript
+getAllValid(): TRow[]
+```
+
+<ResponseField name="TRow[]" type="array">
+  Array of validated rows. Invalid rows are silently skipped.
+</ResponseField>
+
+**Example:**
+
+```typescript
+const posts = client.tables.posts.getAllValid();
+
+for (const post of posts) {
+  console.log(post.title);
+}
+```
+
+### getAllInvalid
+
+Get all rows that fail schema validation. Useful for debugging data corruption or incomplete migrations.
+
+```typescript
+getAllInvalid(): InvalidRowResult[]
+```
+
+<ResponseField name="InvalidRowResult[]" type="array">
+  Array of invalid row results with errors
+  
+  <Expandable title="InvalidRowResult">
+    <ResponseField name="status" type="'invalid'" />
+    <ResponseField name="id" type="string" />
+    <ResponseField name="errors" type="Issue[]" />
+    <ResponseField name="row" type="unknown" />
+  </Expandable>
+</ResponseField>
+
+**Example:**
+
+```typescript
+const invalid = client.tables.posts.getAllInvalid();
+
+for (const result of invalid) {
+  console.log('Invalid row:', result.id);
+  console.log('Errors:', result.errors);
+  console.log('Raw data:', result.row);
+}
+```
+
+## Query Operations
+
+### filter
+
+Filter valid rows by predicate. Invalid rows are silently skipped.
+
+```typescript
+filter(predicate: (row: TRow) => boolean): TRow[]
+```
+
+<ParamField path="predicate" type="(row: TRow) => boolean" required>
+  Function that returns `true` for rows to include
+</ParamField>
+
+**Example:**
+
+```typescript
+const published = client.tables.posts.filter(
+  (post) => post.published === true
+);
+
+const recentPosts = client.tables.posts.filter(
+  (post) => post.createdAt > Date.now() - 86400000
+);
+```
+
+### find
+
+Find the first valid row matching a predicate.
+
+```typescript
+find(predicate: (row: TRow) => boolean): TRow | undefined
+```
+
+<ParamField path="predicate" type="(row: TRow) => boolean" required>
+  Function that returns `true` for the desired row
+</ParamField>
+
+<ResponseField name="TRow | undefined" type="TRow | undefined">
+  The first matching valid row, or `undefined` if no match found
+</ResponseField>
+
+**Example:**
+
+```typescript
+const featured = client.tables.posts.find(
+  (post) => post.featured === true
+);
+
+if (featured) {
+  console.log('Featured post:', featured.title);
+}
+```
+
+### parse
+
+Parse unknown input against the table schema and migrate to the latest version. Does not write to storage.
+
+```typescript
+parse(id: string, input: unknown): RowResult<TRow>
+```
+
+<ParamField path="id" type="string" required>
+  The row ID to inject into the input
+</ParamField>
+
+<ParamField path="input" type="unknown" required>
+  Unknown data to validate against the table schema
+</ParamField>
+
+<ResponseField name="RowResult" type="union">
+  <Expandable title="variants">
+    <ResponseField name="valid" type="{ status: 'valid', row: TRow }" />
+    <ResponseField name="invalid" type="{ status: 'invalid', id: string, errors: Issue[], row: unknown }" />
+  </Expandable>
+</ResponseField>
+
+**Example:**
+
+```typescript
+// Validate external data before committing
+const result = client.tables.posts.parse('1', {
+  title: 'New Post',
+  content: 'Content here',
+  _v: 1
+});
+
+if (result.status === 'valid') {
+  client.tables.posts.set(result.row);
+} else {
+  console.error('Validation failed:', result.errors);
+}
+```
+
+## Delete Operations
+
+### delete
+
+Delete a single row by ID.
+
+```typescript
+delete(id: string): DeleteResult
+```
+
+<ParamField path="id" type="string" required>
+  The row ID to delete
+</ParamField>
+
+<ResponseField name="DeleteResult" type="union">
+  <Expandable title="variants">
+    <ResponseField name="deleted" type="{ status: 'deleted' }">
+      Row was deleted successfully
+    </ResponseField>
+    
+    <ResponseField name="not_found" type="{ status: 'not_found_locally' }">
+      Row doesn't exist locally
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+**Example:**
+
+```typescript
+const result = client.tables.posts.delete('1');
+
+if (result.status === 'deleted') {
+  console.log('Post deleted');
+} else {
+  console.log('Post not found');
+}
+```
+
+### clear
+
+Delete all rows from the table. The table structure is preserved - observers remain attached and the table helper continues to work.
+
+```typescript
+clear(): void
+```
+
+**Example:**
+
+```typescript
+client.tables.posts.clear();
+console.log('All posts deleted');
+```
+
+## Observation
+
+### observe
+
+Watch for row changes. Changes are batched per Y.js transaction.
+
+```typescript
+observe(
+  callback: (changedIds: Set<string>, transaction: unknown) => void
+): () => void
+```
+
+<ParamField path="callback" type="function" required>
+  Receives a `Set<string>` of row IDs that changed. Call `table.get(id)` to determine what happened:
+  - `status === 'not_found'` → row was deleted
+  - Otherwise → row was added or updated
+</ParamField>
+
+<ResponseField name="unsubscribe" type="() => void">
+  Function to call to stop observing changes
+</ResponseField>
+
+**Example:**
+
+```typescript
+const unsubscribe = client.tables.posts.observe((changedIds) => {
+  for (const id of changedIds) {
+    const result = client.tables.posts.get(id);
+    
+    if (result.status === 'not_found') {
+      console.log('Post deleted:', id);
+    } else if (result.status === 'valid') {
+      console.log('Post changed:', result.row.title);
+    }
+  }
+});
+
+// Later: stop observing
+unsubscribe();
+```
+
+## Metadata Operations
+
+### count
+
+Get the total number of rows in the table (includes both valid and invalid rows).
+
+```typescript
+count(): number
+```
+
+**Example:**
+
+```typescript
+const total = client.tables.posts.count();
+console.log(`Total posts: ${total}`);
+```
+
+### has
+
+Check if a row exists by ID.
+
+```typescript
+has(id: string): boolean
+```
+
+<ParamField path="id" type="string" required>
+  The row ID to check
+</ParamField>
+
+**Example:**
+
+```typescript
+if (client.tables.posts.has('1')) {
+  console.log('Post exists');
+} else {
+  console.log('Post not found');
+}
+```
+
+## Batching Operations
+
+Use `client.batch()` to execute multiple table operations atomically:
+
+```typescript
+client.batch(() => {
+  client.tables.posts.set({ id: '1', title: 'First', _v: 1 });
+  client.tables.posts.set({ id: '2', title: 'Second', _v: 1 });
+  client.tables.posts.delete('3');
+});
+// Observer fires once with all 3 changed IDs
+```
+
+See [Table Operations Guide](/guides/table-operations) for more details on batch operations.
+
+## Type Safety
+
+All table operations are fully type-safe:
+
+```typescript
+const posts = defineTable(
+  type({ id: 'string', title: 'string', views: 'number', _v: '1' })
+);
+
+const client = createWorkspace({ id: 'app', tables: { posts } });
+
+// TypeScript enforces the exact schema
+client.tables.posts.set({
+  id: '1',
+  title: 'Hello',
+  views: 100,
+  _v: 1
+});
+
+// Type error: missing required field 'views'
+client.tables.posts.set({
+  id: '1',
+  title: 'Hello',
+  _v: 1
+});
+
+// Type error: wrong type for 'views'
+client.tables.posts.set({
+  id: '1',
+  title: 'Hello',
+  views: 'one hundred',
+  _v: 1
+});
+```
+
+## See Also
+
+- [Schema Types](/api/column-types) - Schema definition patterns and table schema documentation
+- [Table Operations Guide](/guides/table-operations) - Working with tables including batch operations
+- [Client Methods](/api/client-methods) - KV operations and other client methods

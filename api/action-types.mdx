@@ -1,0 +1,544 @@
+---
+title: 'Action Types'
+description: 'Type guards and metadata for action introspection'
+---
+
+## Overview
+
+Epicenter provides type guards and type definitions for working with actions. These utilities enable runtime introspection of action definitions, which is essential for adapters (Server, CLI) that need to traverse and invoke actions.
+
+## Core Types
+
+### Query
+
+A query action definition (read operation). Queries are callable functions with metadata properties attached.
+
+```typescript
+export type Query<
+  TInput extends TSchema | undefined = TSchema | undefined,
+  TOutput = unknown,
+> = ActionHandler<TInput, TOutput> & ActionMeta<TInput> & { type: 'query' }
+```
+
+**Properties:**
+
+<ResponseField name="type" type="'query'" required>
+  Discriminator property identifying this as a query
+</ResponseField>
+
+<ResponseField name="input" type="TSchema">
+  The input schema if provided during definition
+</ResponseField>
+
+<ResponseField name="description" type="string">
+  Human-readable description for documentation
+</ResponseField>
+
+**Example:**
+
+```typescript
+import { defineQuery, type Query } from '@epicenter/workspace';
+import { type } from 'arktype';
+
+const getPost: Query<typeof schema, Post> = defineQuery({
+  input: type({ id: 'string' }),
+  handler: ({ id }) => client.tables.posts.get(id),
+});
+
+console.log(getPost.type);  // 'query'
+```
+
+### Mutation
+
+A mutation action definition (write operation). Mutations are callable functions with metadata properties attached.
+
+```typescript
+export type Mutation<
+  TInput extends TSchema | undefined = TSchema | undefined,
+  TOutput = unknown,
+> = ActionHandler<TInput, TOutput> & ActionMeta<TInput> & { type: 'mutation' }
+```
+
+**Properties:**
+
+<ResponseField name="type" type="'mutation'" required>
+  Discriminator property identifying this as a mutation
+</ResponseField>
+
+<ResponseField name="input" type="TSchema">
+  The input schema if provided during definition
+</ResponseField>
+
+<ResponseField name="description" type="string">
+  Human-readable description for documentation
+</ResponseField>
+
+**Example:**
+
+```typescript
+import { defineMutation, type Mutation } from '@epicenter/workspace';
+import { type } from 'arktype';
+
+const createPost: Mutation<typeof schema, { id: string }> = defineMutation({
+  input: type({ title: 'string' }),
+  handler: ({ title }) => {
+    const id = generateId();
+    client.tables.posts.upsert({ id, title, _v: 1 });
+    return { id };
+  },
+});
+
+console.log(createPost.type);  // 'mutation'
+```
+
+### Action
+
+Union type of Query and Mutation. Use this when you need to handle any action regardless of type.
+
+```typescript
+export type Action<
+  TInput extends TSchema | undefined = TSchema | undefined,
+  TOutput = unknown,
+> = Query<TInput, TOutput> | Mutation<TInput, TOutput>
+```
+
+**Example:**
+
+```typescript
+import { type Action } from '@epicenter/workspace';
+
+function logAction(action: Action) {
+  console.log(`Type: ${action.type}`);
+  console.log(`Description: ${action.description ?? 'N/A'}`);
+  console.log(`Has input: ${action.input !== undefined}`);
+}
+```
+
+### Actions
+
+A tree of action definitions, supporting arbitrary nesting.
+
+```typescript
+export type Actions = {
+  [key: string]: Action | Actions;
+}
+```
+
+**Example:**
+
+```typescript
+import { type Actions } from '@epicenter/workspace';
+
+const actions: Actions = {
+  posts: {
+    getAll: defineQuery({ handler: () => client.tables.posts.getAllValid() }),
+    create: defineMutation({
+      input: type({ title: 'string' }),
+      handler: ({ title }) => {
+        const id = generateId();
+        client.tables.posts.upsert({ id, title, _v: 1 });
+        return { id };
+      },
+    }),
+  },
+  users: {
+    profile: {
+      get: defineQuery({ handler: () => getCurrentUser() }),
+      update: defineMutation({
+        input: type({ name: 'string' }),
+        handler: ({ name }) => updateUserName(name),
+      }),
+    },
+  },
+};
+```
+
+## Type Guards
+
+### isAction()
+
+Checks if a value is an action definition (query or mutation).
+
+```typescript
+function isAction(value: unknown): value is Action
+```
+
+<ParamField path="value" type="unknown" required>
+  The value to check
+</ParamField>
+
+**Returns:** `boolean` - True if the value is an Action definition
+
+**Example:**
+
+```typescript
+import { isAction, defineQuery } from '@epicenter/workspace';
+
+const query = defineQuery({ handler: () => [] });
+const obj = { type: 'query' };  // Not an actual action
+
+console.log(isAction(query));  // true
+console.log(isAction(obj));    // false
+
+if (isAction(value)) {
+  console.log(value.type);  // 'query' | 'mutation'
+  value();                  // call directly
+}
+```
+
+### isQuery()
+
+Checks if a value is a query action definition.
+
+```typescript
+function isQuery(value: unknown): value is Query
+```
+
+<ParamField path="value" type="unknown" required>
+  The value to check
+</ParamField>
+
+**Returns:** `boolean` - True if the value is a Query definition
+
+**Example:**
+
+```typescript
+import { isQuery, defineQuery, defineMutation } from '@epicenter/workspace';
+
+const query = defineQuery({ handler: () => [] });
+const mutation = defineMutation({ handler: () => {} });
+
+console.log(isQuery(query));     // true
+console.log(isQuery(mutation));  // false
+
+if (isQuery(value)) {
+  // TypeScript knows value is a Query
+  console.log('This is a read operation');
+}
+```
+
+### isMutation()
+
+Checks if a value is a mutation action definition.
+
+```typescript
+function isMutation(value: unknown): value is Mutation
+```
+
+<ParamField path="value" type="unknown" required>
+  The value to check
+</ParamField>
+
+**Returns:** `boolean` - True if the value is a Mutation definition
+
+**Example:**
+
+```typescript
+import { isMutation, defineQuery, defineMutation } from '@epicenter/workspace';
+
+const query = defineQuery({ handler: () => [] });
+const mutation = defineMutation({ handler: () => {} });
+
+console.log(isMutation(query));     // false
+console.log(isMutation(mutation));  // true
+
+if (isMutation(value)) {
+  // TypeScript knows value is a Mutation
+  console.log('This is a write operation');
+}
+```
+
+## Introspection
+
+### iterateActions()
+
+Iterates over action definitions, yielding each action with its path. Use this for adapters that need to introspect and invoke actions.
+
+```typescript
+function* iterateActions(
+  actions: Actions,
+  path?: string[]
+): Generator<[Action, string[]]>
+```
+
+<ParamField path="actions" type="Actions" required>
+  The action tree to iterate over
+</ParamField>
+
+<ParamField path="path" type="string[]">
+  Internal parameter for tracking the current path (default: [])
+</ParamField>
+
+**Yields:** Tuples of `[action, path]` where path is an array of keys
+
+**Example:**
+
+```typescript
+import { iterateActions } from '@epicenter/workspace';
+
+const actions = {
+  posts: {
+    getAll: defineQuery({ handler: () => [] }),
+    create: defineMutation({
+      input: type({ title: 'string' }),
+      handler: ({ title }) => {
+        const id = generateId();
+        client.tables.posts.upsert({ id, title, _v: 1 });
+        return { id };
+      },
+    }),
+  },
+  users: {
+    profile: {
+      get: defineQuery({ handler: () => ({}) }),
+    },
+  },
+};
+
+for (const [action, path] of iterateActions(actions)) {
+  console.log(`Path: ${path.join('.')}`);
+  console.log(`Type: ${action.type}`);
+  console.log(`Description: ${action.description ?? 'N/A'}`);
+}
+
+// Output:
+// Path: posts.getAll
+// Type: query
+// Description: N/A
+// Path: posts.create
+// Type: mutation
+// Description: N/A
+// Path: users.profile.get
+// Type: query
+// Description: N/A
+```
+
+### Using iterateActions() in Adapters
+
+#### Server Adapter Example
+
+```typescript
+import { iterateActions, isQuery } from '@epicenter/workspace';
+import { Elysia } from 'elysia';
+
+function createActionsRouter({
+  client,
+  actions,
+}: {
+  client: Workspace;
+  actions: Actions;
+}) {
+  const app = new Elysia();
+
+  for (const [action, path] of iterateActions(actions)) {
+    const route = '/' + path.join('/');
+    
+    if (isQuery(action)) {
+      // Queries map to GET
+      app.get(route, async ({ query }) => {
+        return action(query);
+      });
+    } else {
+      // Mutations map to POST
+      app.post(route, async ({ body }) => {
+        return action(body);
+      });
+    }
+  }
+
+  return app;
+}
+```
+
+#### CLI Adapter Example
+
+```typescript
+import { iterateActions } from '@epicenter/workspace';
+import { Command } from 'commander';
+
+function createCLI({
+  client,
+  actions,
+}: {
+  client: Workspace;
+  actions: Actions;
+}) {
+  const program = new Command();
+
+  for (const [action, path] of iterateActions(actions)) {
+    const command = path.join(':');
+    
+    program
+      .command(command)
+      .description(action.description ?? `Execute ${command}`)
+      .action(async (options) => {
+        const result = await action(options);
+        console.log(JSON.stringify(result, null, 2));
+      });
+  }
+
+  return program;
+}
+
+// Usage:
+// cli posts:getAll
+// cli posts:create --title "My Post"
+```
+
+#### Documentation Generator Example
+
+```typescript
+import { iterateActions, isQuery } from '@epicenter/workspace';
+import { standardSchemaToJsonSchema } from '@epicenter/workspace';
+
+function generateAPIDocs(actions: Actions) {
+  const docs = [];
+
+  for (const [action, path] of iterateActions(actions)) {
+    const route = path.join('/');
+    const method = isQuery(action) ? 'GET' : 'POST';
+    
+    const doc = {
+      path: `/${route}`,
+      method,
+      description: action.description,
+      input: action.input
+        ? standardSchemaToJsonSchema(action.input)
+        : undefined,
+    };
+    
+    docs.push(doc);
+  }
+
+  return docs;
+}
+
+// Output:
+// [
+//   {
+//     path: '/posts/getAll',
+//     method: 'GET',
+//     description: 'Get all posts',
+//     input: undefined
+//   },
+//   {
+//     path: '/posts/create',
+//     method: 'POST',
+//     description: 'Create a post',
+//     input: { type: 'object', properties: { title: { type: 'string' } } }
+//   }
+// ]
+```
+
+## Pattern: Type-Safe Action Router
+
+```typescript
+import { type Actions, isAction, isQuery } from '@epicenter/workspace';
+
+function executeAction(
+  actions: Actions,
+  path: string[],
+  input?: unknown,
+): unknown {
+  // Navigate to the action
+  let current: any = actions;
+  for (const key of path) {
+    current = current[key];
+    if (!current) {
+      throw new Error(`Action not found: ${path.join('.')}`);
+    }
+  }
+
+  // Verify it's an action
+  if (!isAction(current)) {
+    throw new Error(`Not an action: ${path.join('.')}`);
+  }
+
+  // Execute with appropriate input
+  if (current.input && input === undefined) {
+    throw new Error('Input required but not provided');
+  }
+
+  return current(input);
+}
+
+// Usage
+const result = executeAction(
+  actions,
+  ['posts', 'create'],
+  { title: 'My Post' }
+);
+```
+
+## Best Practices
+
+### Use type guards for runtime checks
+
+```typescript
+import { isAction, isQuery } from '@epicenter/workspace';
+
+function processActions(obj: unknown) {
+  if (isAction(obj)) {
+    if (isQuery(obj)) {
+      console.log('Safe to call for reads');
+    } else {
+      console.log('This will modify state');
+    }
+  }
+}
+```
+
+### Traverse nested action trees
+
+```typescript
+import { type Actions, isAction } from '@epicenter/workspace';
+
+function countActions(obj: Actions | Action): number {
+  if (isAction(obj)) return 1;
+  
+  let count = 0;
+  for (const value of Object.values(obj)) {
+    count += countActions(value as Actions | Action);
+  }
+  return count;
+}
+
+console.log(countActions(actions));  // Total number of actions
+```
+
+### Generate type-safe wrappers
+
+```typescript
+import { type Actions, iterateActions } from '@epicenter/workspace';
+
+function createTypedClient<T extends Actions>(actions: T) {
+  const client: any = {};
+
+  for (const [action, path] of iterateActions(actions)) {
+    let current = client;
+    
+    // Create nested structure
+    for (let i = 0; i < path.length - 1; i++) {
+      const key = path[i];
+      if (!current[key]) current[key] = {};
+      current = current[key];
+    }
+    
+    // Assign the action
+    const finalKey = path[path.length - 1];
+    current[finalKey] = action;
+  }
+
+  return client as T;
+}
+
+// Fully typed!
+const typedClient = createTypedClient(actions);
+typedClient.posts.create({ title: 'My Post' });
+```
+
+## Related
+
+- [defineQuery()](/api/define-query) - Define read operations
+- [defineMutation()](/api/define-mutation) - Define write operations
+- [Actions Concept](/concepts/actions) - Understanding the action system

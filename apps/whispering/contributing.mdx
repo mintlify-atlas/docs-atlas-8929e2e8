@@ -1,0 +1,412 @@
+---
+title: Contributing
+description: Help build the future of open-source transcription
+---
+
+We welcome contributions! Whispering is built with care and attention to clean, maintainable code.
+
+## Quick Start
+
+<Steps>
+  <Step title="Clone the repository">
+    ```bash
+    git clone https://github.com/EpicenterHQ/epicenter.git
+    cd epicenter
+    ```
+  </Step>
+
+  <Step title="Install dependencies">
+    ```bash
+    bun i
+    ```
+  </Step>
+
+  <Step title="Run in development mode">
+    ```bash
+    cd apps/whispering
+    bun tauri dev
+    ```
+  </Step>
+</Steps>
+
+<Note>
+Whispering uses `bun` as the package manager. Make sure you have it installed.
+</Note>
+
+## Contributing Process
+
+<Steps>
+  <Step title="Fork the repository">
+    Create your own fork of the Epicenter repository on GitHub.
+  </Step>
+
+  <Step title="Create a feature branch">
+    ```bash
+    git checkout -b feature/your-feature-name
+    ```
+  </Step>
+
+  <Step title="Make your changes">
+    Follow the code style guidelines and architecture patterns described below.
+  </Step>
+
+  <Step title="Commit and push">
+    ```bash
+    git add .
+    git commit -m "Add your feature"
+    git push origin feature/your-feature-name
+    ```
+  </Step>
+
+  <Step title="Create a pull request">
+    Open a pull request from your fork to the main Epicenter repository.
+  </Step>
+</Steps>
+
+## Code Style Guidelines
+
+- Follow existing TypeScript and Svelte patterns throughout
+- Use Result types from the [WellCrafted library](https://github.com/wellcrafted-dev/wellcrafted) for all error handling
+- Follow WellCrafted best practices: explicit errors with `Result<T, E>`, structured `TaggedError` objects, and comprehensive error context
+- Study existing patterns in these key directories:
+  - **Services Architecture** - Platform-agnostic business logic in `src/lib/services/`
+  - **Query Layer Patterns** - RPC pattern and reactive state in `src/lib/query/`
+  - **Constants Organization** - Type-safe configuration in `src/lib/constants/`
+
+<Tip>
+New to the codebase? Start with the [Architecture Deep Dive](#architecture-overview) to understand how everything fits together.
+</Tip>
+
+## Architecture Overview
+
+Whispering uses a clean three-layer architecture with **97% code sharing** between desktop and web versions.
+
+```
+┌─────────────┐     ┌─────────────┐     ┌──────────────┐
+│  UI Layer   │ --> │  Query Layer│ --> │ Service Layer│
+│ (Svelte 5)  │     │ (TanStack)  │     │   (Pure)     │
+└─────────────┘     └─────────────┘     └──────────────┘
+      ↑                    │
+      └────────────────────┘
+         Reactive Updates
+```
+
+### Service Layer - Pure Business Logic
+
+The service layer contains all business logic as **pure functions** with zero UI dependencies.
+
+**Key principles:**
+- Accept explicit parameters (no hidden dependencies)
+- Return `Result<T, E>` types for consistent error handling
+- No knowledge of UI state, settings, or reactive variables
+- Platform abstraction at build time
+
+**Example:**
+
+```typescript
+// Platform abstraction happens at build time
+export const ClipboardServiceLive = window.__TAURI_INTERNALS__
+  ? createClipboardServiceDesktop() // Uses Tauri clipboard APIs
+  : createClipboardServiceWeb();     // Uses browser clipboard APIs
+```
+
+This enables **97% code sharing** between desktop and web versions:
+- **Total code**: 22,824 lines
+- **Platform-specific**: 685 lines (3%)
+- **Shared code**: 22,139 lines (97%)
+
+### Query Layer - Reactivity and State
+
+The query layer wraps services with TanStack Query and handles:
+
+1. **Runtime Dependency Injection** - Switching implementations based on user settings
+2. **Optimistic Updates** - Instant UI updates via cache manipulation
+3. **Error Transformation** - Converting service errors to `WhisperingError`
+
+**Example:**
+
+```typescript
+async function transcribeBlob(blob: Blob) {
+  const selectedService = settings.value['transcription.selectedTranscriptionService'];
+
+  switch (selectedService) {
+    case 'OpenAI':
+      return services.transcriptions.openai.transcribe(blob, {
+        apiKey: settings.value['apiKeys.openai'],
+        model: settings.value['transcription.openai.model'],
+      });
+    case 'Groq':
+      return services.transcriptions.groq.transcribe(blob, {
+        apiKey: settings.value['apiKeys.groq'],
+        model: settings.value['transcription.groq.model'],
+      });
+  }
+}
+```
+
+### UI Layer - Svelte Components
+
+Clean Svelte 5 components with minimal logic:
+- Use TanStack Query for data fetching
+- Handle user interactions
+- Display data and errors
+- No business logic
+
+## Built With
+
+Whispering showcases modern web technologies:
+
+### Web and Desktop
+
+- **[Svelte 5](https://svelte.dev)**: UI reactivity library with runes system
+- **[SvelteKit](https://kit.svelte.dev)**: Routing and static site generation
+- **[Tauri](https://tauri.app)**: Desktop app framework for native performance
+- **[WellCrafted](https://github.com/wellcrafted-dev/wellcrafted)**: Lightweight type-safe error handling
+- **[TanStack Query](https://tanstack.com/query)**: Data synchronization and caching
+- **[IndexedDB](https://developer.mozilla.org/en-US/docs/Web/API/IndexedDB_API) & [Dexie.js](https://dexie.org)**: Local data storage
+- **[shadcn-svelte](https://www.shadcn-svelte.com)**: Beautiful, accessible components
+- **[TailwindCSS](https://tailwindcss.com)**: Utility-first CSS framework
+- **[Turborepo](https://turborepo.org)**: Monorepo management
+- **[Rust](https://www.rust-lang.org)**: Native desktop features
+
+## Adding New Adapters
+
+We'd love to expand Whispering's capabilities with more transcription and AI service adapters!
+
+### Adding a Transcription Service
+
+Transcription services convert audio to text. Here's how to add one:
+
+<Steps>
+  <Step title="Create the service implementation">
+    Create your service in the appropriate directory:
+    - **Cloud services**: `src/lib/services/isomorphic/transcription/cloud/`
+    - **Local services**: `src/lib/services/isomorphic/transcription/local/`
+    - **Self-hosted**: `src/lib/services/isomorphic/transcription/self-hosted/`
+
+    ```typescript
+    // Example: src/lib/services/isomorphic/transcription/cloud/your-service.ts
+    import { WhisperingErr, type WhisperingError } from '$lib/result';
+    import { Err, Ok, tryAsync, type Result } from 'wellcrafted/result';
+
+    export const YOUR_SERVICE_MODELS = [
+      {
+        name: 'model-v1',
+        description: 'Description of what makes this model special',
+        cost: '$0.XX/hour',
+      },
+    ] as const;
+
+    export type YourServiceModel = (typeof YOUR_SERVICE_MODELS)[number];
+
+    export function createYourServiceTranscriptionService() {
+      return {
+        async transcribe(
+          audioBlob: Blob,
+          options: {
+            prompt: string;
+            temperature: string;
+            apiKey: string;
+            modelName: YourServiceModel['name'];
+          },
+        ): Promise<Result<string, WhisperingError>> {
+          // Validate API key
+          if (!options.apiKey) {
+            return WhisperingErr({
+              title: '🔑 API Key Required',
+              description: 'Please enter your YourService API key in settings.',
+            });
+          }
+
+          // Make the API call
+          const { data, error } = await tryAsync({
+            try: () => yourServiceClient.transcribe(audioBlob, options),
+            catch: (error) =>
+              WhisperingErr({
+                title: '❌ Transcription Failed',
+                description: error.message,
+              }),
+          });
+
+          if (error) return Err(error);
+          return Ok(data.text.trim());
+        },
+      };
+    }
+
+    export const YourServiceTranscriptionServiceLive =
+      createYourServiceTranscriptionService();
+    ```
+  </Step>
+
+  <Step title="Update the service registry">
+    Add your service to `src/lib/services/isomorphic/transcription/registry.ts`:
+
+    ```typescript
+    import yourServiceIcon from '$lib/constants/icons/your-service.svg?raw';
+    import { YOUR_SERVICE_MODELS, type YourServiceModel } from './cloud/your-service';
+
+    export const TRANSCRIPTION_SERVICE_IDS = [
+      // ... existing services
+      'YourService',
+    ] as const;
+
+    export const TRANSCRIPTION_SERVICES = [
+      // ... existing services
+      {
+        id: 'YourService',
+        name: 'Your Service Name',
+        icon: yourServiceIcon,
+        description: 'Description of what makes your service special',
+        models: YOUR_SERVICE_MODELS,
+        defaultModel: YOUR_SERVICE_MODELS[0],
+        location: 'cloud',
+        apiKeyField: 'apiKeys.yourservice',
+      },
+    ];
+    ```
+  </Step>
+
+  <Step title="Wire up the query layer">
+    Add to `src/lib/query/isomorphic/transcription.ts`:
+
+    ```typescript
+    case 'YourService':
+      return services.transcriptions.yourservice.transcribe(blob, {
+        apiKey: settings.value['apiKeys.yourservice'],
+        modelName: settings.value['transcription.yourservice.model'],
+      });
+    ```
+  </Step>
+
+  <Step title="Update settings and UI">
+    1. Add API key field to `src/lib/settings/settings.ts`
+    2. Create API key input component
+    3. Update settings page UI
+  </Step>
+</Steps>
+
+### Adding an AI Transformation Adapter
+
+AI transformations power the transformation pipeline. Here's how to add one:
+
+<Steps>
+  <Step title="Create the completion service">
+    ```typescript
+    // src/lib/services/isomorphic/completion/your-provider.ts
+    export function createYourProviderCompletionService() {
+      return {
+        async complete(options: {
+          apiKey: string;
+          model: string;
+          systemPrompt: string;
+          userPrompt: string;
+        }): Promise<Result<string, WhisperingError>> {
+          // Implementation
+        },
+      };
+    }
+    ```
+  </Step>
+
+  <Step title="Register and wire up">
+    1. Export from `src/lib/services/isomorphic/completion/index.ts`
+    2. Add to transformation handler in `src/lib/query/isomorphic/transformer.ts`
+    3. Update settings schema
+  </Step>
+</Steps>
+
+### Error Handling Best Practices
+
+Always use the `WhisperingErr` helper for user-facing errors:
+
+```typescript
+return WhisperingErr({
+  title: '⏱️ Rate Limit Reached',
+  description: 'Too many requests. Please try again in a few minutes.',
+  action: {
+    type: 'link',
+    label: 'View rate limits',
+    href: 'https://yourservice.com/rate-limits',
+  },
+});
+```
+
+## Good First Issues
+
+- UI/UX improvements and accessibility enhancements
+- Performance optimizations
+- New transcription or transformation service integrations
+- Documentation improvements
+- Bug fixes
+
+<Tip>
+Feel free to suggest and implement any features that improve usability—we'll do our best to integrate contributions that make Whispering better for everyone.
+</Tip>
+
+## Building From Source
+
+If you want to build the executable yourself:
+
+### Desktop App
+
+```bash
+cd apps/whispering
+bun i
+bun tauri build
+```
+
+Find the executable in `apps/whispering/target/release`
+
+### Web Version
+
+```bash
+cd apps/whispering
+bun run build
+```
+
+## Version Bumping
+
+When preparing a new release, use the version bumping script:
+
+```bash
+bun run bump-version <new-version>
+
+# Example:
+bun run bump-version 7.12.0
+```
+
+This automatically updates:
+- Root `package.json`
+- App `package.json`
+- Tauri configuration (`tauri.conf.json`)
+- Cargo manifest (`Cargo.toml`)
+
+## Acknowledgments
+
+### Local Transcription
+
+Whispering's local transcription capabilities are powered by:
+
+- **[transcribe-rs](https://github.com/cjpais/transcribe-rs)** by [CJ Pais](https://github.com/cjpais) - Unified Rust library for speech-to-text engines
+- **[Handy](https://github.com/cjpais/handy)** by [CJ Pais](https://github.com/cjpais) - Cross-platform desktop speech-to-text application
+- **[whisper.cpp](https://github.com/ggerganov/whisper.cpp)** by Georgi Gerganov - High-performance C/C++ port of OpenAI's Whisper model
+
+## Support and Community
+
+<CardGroup cols={2}>
+  <Card title="Discord Community" icon="discord" href="https://go.epicenterhq.com/discord">
+    Join the community Discord for discussions and support
+  </Card>
+  <Card title="GitHub Issues" icon="github" href="https://github.com/EpicenterHQ/epicenter/issues">
+    Report bugs, request features, or ask questions
+  </Card>
+</CardGroup>
+
+## License
+
+Whispering is released under the [AGPLv3 License](https://github.com/EpicenterHQ/epicenter/blob/main/LICENSE). Fork it, modify it, build on top of it, make it yours.
+
+---
+
+Transcription should be free, open, and accessible to everyone. Join us in making it so.

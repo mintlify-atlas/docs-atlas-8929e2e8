@@ -1,0 +1,329 @@
+---
+title: 'markdownProvider()'
+description: 'Human-readable markdown file persistence for Epicenter workspaces'
+icon: 'file-lines'
+---
+
+## Overview
+
+The `markdownProvider()` function creates a markdown extension that persists workspace data as human-readable markdown files with YAML frontmatter.
+
+```typescript
+import { markdownProvider } from '@epicenter/workspace';
+```
+
+## Function Signature
+
+<ParamField path="context" type="ExtensionContext" required>
+  Extension context containing the workspace's Y.Doc and other metadata
+  
+  <Expandable title="Properties">
+    <ParamField path="ydoc" type="Y.Doc" required>
+      The Yjs document instance for the workspace
+    </ParamField>
+    
+    <ParamField path="id" type="string" required>
+      The workspace ID
+    </ParamField>
+    
+    <ParamField path="awareness" type="Awareness" required>
+      The workspace awareness instance
+    </ParamField>
+    
+    <ParamField path="whenReady" type="Promise<void>" required>
+      Promise that resolves when all prior extensions are ready
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField path="config" type="MarkdownProviderConfig">
+  Optional configuration for markdown file handling
+  
+  <Expandable title="Properties">
+    <ParamField path="directory" type="string">
+      Workspace-level directory for markdown files
+      
+      Default: `./{workspaceId}/`
+    </ParamField>
+    
+    <ParamField path="tableConfigs" type="Record<string, TableConfig>">
+      Per-table configuration for custom serialization
+      
+      <Expandable title="TableConfig Properties">
+        <ParamField path="directory" type="string">
+          Directory for this table's markdown files (overrides workspace directory)
+        </ParamField>
+        
+        <ParamField path="serialize" type="(context: SerializeContext) => SerializedMarkdown">
+          Custom serialization function
+          
+          **SerializeContext**: `{ row, table }`
+          
+          **SerializedMarkdown**: `{ frontmatter, body, filename }`
+        </ParamField>
+        
+        <ParamField path="deserialize" type="(context: DeserializeContext) => Result<Row, Error>">
+          Custom deserialization function
+          
+          **DeserializeContext**: `{ frontmatter, body, filename, table }`
+          
+          Must return `Ok(row)` or `Err(error)`
+        </ParamField>
+      </Expandable>
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="Extension" type="object">
+  Extension instance with markdown sync operations
+  
+  <Expandable title="Properties">
+    <ResponseField name="pullToMarkdown" type="Query">
+      Sync all data from YJS to markdown files (replace all)
+    </ResponseField>
+    
+    <ResponseField name="pushFromMarkdown" type="Query">
+      Sync all data from markdown files to YJS (replace all)
+    </ResponseField>
+    
+    <ResponseField name="scanForErrors" type="Query">
+      Validate all markdown files and rebuild diagnostics
+    </ResponseField>
+    
+    <ResponseField name="whenReady" type="Promise<void>">
+      Promise that resolves when the extension is ready
+    </ResponseField>
+    
+    <ResponseField name="destroy" type="() => void">
+      Cleanup function to stop file watching
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## Storage Locations
+
+The markdown provider stores files in the following locations:
+
+- **Markdown files**: `./{workspaceId}/{tableName}/*.md` (configurable)
+- **Logs**: `.epicenter/providers/markdown/logs/{workspaceId}.log`
+- **Diagnostics**: `.epicenter/providers/markdown/diagnostics/{workspaceId}.json`
+
+## Basic Usage
+
+### Default Configuration
+
+```typescript
+import { createWorkspace, markdownProvider } from '@epicenter/workspace';
+
+const workspace = createWorkspace(definition)
+  .withExtension('markdown', (c) => markdownProvider(c));
+```
+
+With default configuration:
+- **Frontmatter**: All columns except `content`
+- **Body**: `content` column (if exists)
+- **Filename**: `{id}.md`
+
+### Custom Directory
+
+```typescript
+const workspace = createWorkspace(definition)
+  .withExtension('markdown', (c) =>
+    markdownProvider(c, {
+      directory: './data',
+    })
+  );
+```
+
+### Custom Serialization
+
+```typescript
+import { basename } from 'node:path';
+import { Ok, Err } from '@epicenter/workspace';
+
+const workspace = createWorkspace(definition)
+  .withExtension('markdown', (c) =>
+    markdownProvider(c, {
+      tableConfigs: {
+        posts: {
+          directory: './posts',
+          serialize: ({ row }) => ({
+            frontmatter: {
+              title: row.title,
+              published: row.published,
+              date: row.publishedAt,
+            },
+            body: row.content,
+            filename: `${row.id}.md`,
+          }),
+          deserialize: ({ frontmatter, body, filename }) => {
+            const id = basename(filename, '.md');
+            return Ok({
+              id,
+              content: body,
+              title: frontmatter.title,
+              published: frontmatter.published,
+              publishedAt: frontmatter.date,
+            });
+          },
+        },
+      },
+    })
+  );
+```
+
+## Sync Operations
+
+### Manual Sync Actions
+
+```typescript
+const blogActions = {
+  syncToMarkdown: defineMutation({
+    handler: () => workspace.extensions.markdown.pullToMarkdown(),
+  }),
+  
+  syncFromMarkdown: defineMutation({
+    handler: () => workspace.extensions.markdown.pushFromMarkdown(),
+  }),
+  
+  validateFiles: defineQuery({
+    handler: () => workspace.extensions.markdown.scanForErrors(),
+  }),
+};
+```
+
+## File Format Example
+
+### Generated Markdown File
+
+**File**: `./blog/posts/abc123.md`
+
+```markdown
+---
+title: Getting Started with Epicenter
+published: true
+category: tech
+views: 42
+publishedAt: 2024-03-15T10:30:00Z
+---
+
+This is the post content. It supports **markdown** formatting.
+
+## Headings
+
+Lists, code blocks, and all standard markdown features work.
+```
+
+## How It Works
+
+1. **File Watching**: Watches markdown directories for file changes
+2. **Bidirectional Sync**: Syncs changes between markdown files and YJS
+3. **Mapping**: Maintains rowId ↔ filename mapping (handles renames/deletions)
+4. **Validation**: Validates all files on startup
+5. **Error Tracking**: Tracks errors in diagnostics (JSON) and error log (append-only)
+6. **Loop Prevention**: Prevents infinite loops with sync coordination flags
+
+## Error Handling
+
+### Diagnostics File
+
+Validation errors are tracked in a JSON diagnostics file:
+
+```json
+{
+  "posts/invalid.md": {
+    "error": "Missing required field: title",
+    "timestamp": "2024-03-15T10:30:00Z"
+  }
+}
+```
+
+### Error Log
+
+An append-only log file records all errors:
+
+```
+[2024-03-15T10:30:00Z] posts/invalid.md: Missing required field: title
+```
+
+## Advanced Examples
+
+### Custom Filename Generation
+
+```typescript
+serialize: ({ row }) => ({
+  frontmatter: { title: row.title },
+  body: row.content,
+  filename: `${row.publishedAt}-${row.slug}.md`,
+}),
+```
+
+### Nested Frontmatter
+
+```typescript
+serialize: ({ row }) => ({
+  frontmatter: {
+    meta: {
+      title: row.title,
+      author: row.author,
+    },
+    seo: {
+      description: row.description,
+      keywords: row.keywords,
+    },
+  },
+  body: row.content,
+  filename: `${row.id}.md`,
+}),
+```
+
+### Error Handling in Deserialize
+
+```typescript
+deserialize: ({ frontmatter, body, filename }) => {
+  if (!frontmatter.title) {
+    return Err(
+      MarkdownProviderErr({
+        message: 'Missing required field: title',
+        context: { filename },
+      })
+    );
+  }
+  
+  return Ok({
+    id: basename(filename, '.md'),
+    title: frontmatter.title,
+    content: body,
+  });
+},
+```
+
+## Type Safety
+
+The markdown provider validates data against your workspace schema:
+
+```typescript
+const definition = defineWorkspace({
+  id: 'blog',
+  tables: {
+    posts: {
+      id: id(),
+      title: text(),
+      content: text({ nullable: true }),
+      published: boolean({ default: false }),
+    },
+  },
+});
+
+const workspace = createWorkspace(definition)
+  .withExtension('markdown', markdownProvider);
+
+// Validation errors are logged but don't block sync
+// Invalid files are tracked in diagnostics
+```
+
+## Related
+
+- [createWorkspace()](/api/create-client) - Create workspace client
+- [sqliteProvider()](/api/sqlite-provider) - SQLite database integration
+- [Table Operations](/api/table-operations) - CRUD operations

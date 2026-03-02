@@ -1,0 +1,586 @@
+---
+title: Custom Extensions
+description: Build your own extensions to add custom capabilities to Epicenter workspaces
+---
+
+## Overview
+
+Extensions are modular add-ons that enhance Epicenter workspaces with custom capabilities. You can build extensions for:
+
+- **Vector search** — Embed documents and query by similarity
+- **Full-text search** — Index content for fast text search
+- **Analytics** — Track usage metrics and events
+- **Custom storage** — Persist to S3, Supabase, or other backends
+- **External APIs** — Integrate with third-party services
+
+## Extension Anatomy
+
+### The Factory Pattern
+
+Every extension is a factory function that receives context and returns exports:
+
+```typescript
+import type { ExtensionFactory } from '@epicenter/workspace';
+
+const myExtension: ExtensionFactory = (context) => {
+  // 1. Access workspace state
+  const { id, ydoc, tables, kv, extensions, whenReady } = context;
+
+  // 2. Initialize resources
+  const db = new Database(':memory:');
+
+  // 3. Return exports (optional lifecycle hooks)
+  return {
+    // Custom exports (your public API)
+    query: (sql) => db.query(sql),
+    insert: (data) => db.insert(data),
+
+    // Optional: Async initialization
+    whenReady: db.initialize(),
+
+    // Optional: Cleanup function
+    destroy: () => db.close(),
+  };
+};
+```
+
+### Extension Context
+
+The context object provides access to the workspace:
+
+```typescript
+type ExtensionContext = {
+  id: string;                // Workspace ID
+  ydoc: Y.Doc;               // YJS document
+  definitions: {             // Workspace schemas
+    tables: TableDefinitions;
+    kv: KvDefinitions;
+    awareness: AwarenessDefinitions;
+  };
+  tables: TablesHelper;      // Table operations
+  kv: KvHelper;              // Key-value operations
+  awareness: AwarenessHelper; // Awareness API
+  extensions: TExtensions;   // Prior extensions (typed)
+  whenReady: Promise<void>;  // Wait for prior extensions
+};
+```
+
+## Lifecycle Protocol
+
+Extensions follow a standard lifecycle:
+
+### 1. Factory (Synchronous)
+
+The factory is always synchronous. Return your exports immediately:
+
+```typescript
+const analytics: ExtensionFactory = ({ id, tables }) => {
+  const events: Event[] = [];
+
+  // Observe table changes
+  tables.posts.observe((changedIds) => {
+    events.push({ type: 'post_updated', ids: Array.from(changedIds) });
+  });
+
+  return {
+    getEvents: () => events,
+    clearEvents: () => { events.length = 0; },
+  };
+};
+```
+
+### 2. Initialization (`whenReady`)
+
+Optional async initialization via `whenReady` promise:
+
+```typescript
+const vectorSearch: ExtensionFactory = ({ tables, whenReady }) => {
+  const index = new VectorIndex();
+
+  const ready = (async () => {
+    // Wait for prior extensions (persistence, etc.)
+    await whenReady;
+
+    // Build initial index
+    const posts = tables.posts.getAllValid();
+    for (const post of posts) {
+      const embedding = await embed(post.content);
+      index.add(post.id, embedding);
+    }
+  })();
+
+  return {
+    search: (query) => index.search(query),
+    whenReady: ready,
+  };
+};
+```
+
+### 3. Cleanup (`destroy`)
+
+Optional cleanup function:
+
+```typescript
+const websocket: ExtensionFactory = () => {
+  const ws = new WebSocket('wss://api.example.com');
+
+  return {
+    send: (data) => ws.send(data),
+    destroy: () => ws.close(),
+  };
+};
+```
+
+## Example: Analytics Extension
+
+Track workspace events and usage metrics:
+
+```typescript
+import type { ExtensionFactory } from '@epicenter/workspace';
+
+type Event = {
+  type: string;
+  timestamp: number;
+  data: unknown;
+};
+
+const analytics: ExtensionFactory = ({ tables, kv }) => {
+  const events: Event[] = [];
+
+  // Track table changes
+  for (const [tableName, table] of Object.entries(tables)) {
+    table.observe((changedIds) => {
+      events.push({
+        type: `${tableName}_changed`,
+        timestamp: Date.now(),
+        data: { count: changedIds.size },
+      });
+    });
+  }
+
+  // Track KV changes
+  kv.observe('theme', (change) => {
+    events.push({
+      type: 'theme_changed',
+      timestamp: Date.now(),
+      data: change,
+    });
+  });
+
+  return {
+    getEvents: () => events,
+    getEventsByType: (type: string) => events.filter((e) => e.type === type),
+    clearEvents: () => { events.length = 0; },
+  };
+};
+
+// Usage
+const client = createWorkspace(definition)
+  .withExtension('analytics', analytics);
+
+await client.whenReady;
+
+// Access analytics
+const events = client.extensions.analytics.getEvents();
+console.log('Total events:', events.length);
+```
+
+## Example: Vector Search Extension
+
+Embed and search documents by semantic similarity:
+
+```typescript
+import type { ExtensionFactory } from '@epicenter/workspace';
+import { embed } from '@your/embedding-library';
+
+type VectorIndex = Map<string, number[]>;
+
+const vectorSearch: ExtensionFactory = ({ tables, whenReady }) => {
+  const index: VectorIndex = new Map();
+
+  const ready = (async () => {
+    await whenReady;
+
+    // Build initial index
+    const posts = tables.posts.getAllValid();
+    for (const post of posts) {
+      const embedding = await embed(post.content);
+      index.set(post.id, embedding);
+    }
+
+    // Watch for new posts
+    tables.posts.observe(async (changedIds) => {
+      for (const id of changedIds) {
+        const result = tables.posts.get(id);
+        if (result.status === 'valid') {
+          const embedding = await embed(result.row.content);
+          index.set(id, embedding);
+        } else if (result.status === 'not_found') {
+          index.delete(id);
+        }
+      }
+    });
+  })();
+
+  return {
+    search: async (query: string, limit = 10) => {
+      const queryEmbedding = await embed(query);
+      const results: Array<{ id: string; score: number }> = [];
+
+      for (const [id, embedding] of index) {
+        const score = cosineSimilarity(queryEmbedding, embedding);
+        results.push({ id, score });
+      }
+
+      return results
+        .sort((a, b) => b.score - a.score)
+        .slice(0, limit);
+    },
+    whenReady: ready,
+  };
+};
+
+function cosineSimilarity(a: number[], b: number[]): number {
+  let dot = 0;
+  let magA = 0;
+  let magB = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    magA += a[i] * a[i];
+    magB += b[i] * b[i];
+  }
+  return dot / (Math.sqrt(magA) * Math.sqrt(magB));
+}
+
+// Usage
+const client = createWorkspace(definition)
+  .withExtension('vectorSearch', vectorSearch);
+
+await client.whenReady;
+
+// Search by semantic similarity
+const results = await client.extensions.vectorSearch.search(
+  'How to build a REST API',
+  5
+);
+
+for (const { id, score } of results) {
+  const post = client.tables.posts.get(id);
+  if (post.status === 'valid') {
+    console.log(`${post.row.title} (score: ${score})`);
+  }
+}
+```
+
+## Example: S3 Backup Extension
+
+Automatically backup YJS state to S3:
+
+```typescript
+import type { ExtensionFactory } from '@epicenter/workspace';
+import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
+import * as Y from 'yjs';
+
+type S3BackupConfig = {
+  bucket: string;
+  region: string;
+  interval: number; // Backup interval in ms
+};
+
+const s3Backup = (
+  config: S3BackupConfig
+): ExtensionFactory => {
+  return ({ id, ydoc, whenReady }) => {
+    const s3 = new S3Client({ region: config.region });
+    let backupTimer: ReturnType<typeof setInterval>;
+
+    const backup = async () => {
+      const state = Y.encodeStateAsUpdate(ydoc);
+      const key = `${id}/${Date.now()}.yjs`;
+
+      await s3.send(
+        new PutObjectCommand({
+          Bucket: config.bucket,
+          Key: key,
+          Body: state,
+        })
+      );
+
+      console.log(`Backed up to s3://${config.bucket}/${key}`);
+    };
+
+    const ready = (async () => {
+      await whenReady;
+      backupTimer = setInterval(backup, config.interval);
+      await backup(); // Initial backup
+    })();
+
+    return {
+      backup, // Manual backup
+      whenReady: ready,
+      destroy: () => {
+        clearInterval(backupTimer);
+      },
+    };
+  };
+};
+
+// Usage
+const client = createWorkspace(definition)
+  .withExtension('s3Backup', s3Backup({
+    bucket: 'my-epicenter-backups',
+    region: 'us-east-1',
+    interval: 60_000, // Backup every minute
+  }));
+
+await client.whenReady;
+
+// Manual backup
+await client.extensions.s3Backup.backup();
+```
+
+## Accessing Prior Extensions
+
+Extensions are chained, so you can access previous extensions:
+
+```typescript
+const fullTextSearch: ExtensionFactory = ({ tables, extensions }) => {
+  const index = new Map<string, Set<string>>();
+
+  // Access SQLite extension from prior chain
+  const { db } = extensions.sqlite;
+
+  const buildIndex = async () => {
+    // Query via SQLite for better performance
+    const posts = await db.query('SELECT id, content FROM posts');
+    for (const post of posts) {
+      const tokens = tokenize(post.content);
+      for (const token of tokens) {
+        if (!index.has(token)) index.set(token, new Set());
+        index.get(token)!.add(post.id);
+      }
+    }
+  };
+
+  return {
+    search: (query: string) => {
+      const tokens = tokenize(query);
+      const results = new Set<string>();
+      for (const token of tokens) {
+        const ids = index.get(token);
+        if (ids) {
+          for (const id of ids) results.add(id);
+        }
+      }
+      return Array.from(results);
+    },
+    whenReady: buildIndex(),
+  };
+};
+
+// Chain extensions
+const client = createWorkspace(definition)
+  .withExtension('sqlite', sqliteProvider)
+  .withExtension('fullTextSearch', fullTextSearch); // Can access sqlite!
+```
+
+## TypeScript Tips
+
+### Typed Extension Exports
+
+Use explicit return types for better IDE support:
+
+```typescript
+type AnalyticsExports = {
+  getEvents: () => Event[];
+  clearEvents: () => void;
+};
+
+const analytics: ExtensionFactory<AnalyticsExports> = (context) => {
+  // Implementation
+  return {
+    getEvents: () => [],
+    clearEvents: () => {},
+  };
+};
+```
+
+### Generic Extensions
+
+Build reusable extensions with configuration:
+
+```typescript
+type CacheConfig = {
+  maxSize: number;
+  ttl: number;
+};
+
+function createCache<TValue>(
+  config: CacheConfig
+): ExtensionFactory<{
+  get: (key: string) => TValue | undefined;
+  set: (key: string, value: TValue) => void;
+}> {
+  return () => {
+    const cache = new Map<string, { value: TValue; expiry: number }>();
+
+    return {
+      get: (key) => {
+        const entry = cache.get(key);
+        if (!entry) return undefined;
+        if (Date.now() > entry.expiry) {
+          cache.delete(key);
+          return undefined;
+        }
+        return entry.value;
+      },
+      set: (key, value) => {
+        if (cache.size >= config.maxSize) {
+          const firstKey = cache.keys().next().value;
+          cache.delete(firstKey);
+        }
+        cache.set(key, { value, expiry: Date.now() + config.ttl });
+      },
+    };
+  };
+}
+
+// Usage
+const client = createWorkspace(definition)
+  .withExtension('cache', createCache({ maxSize: 100, ttl: 60_000 }));
+```
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Keep factories synchronous">
+    Factories must return immediately. Use `whenReady` for async initialization:
+    
+    ```typescript
+    // ✅ Good: Sync factory, async init
+    const ext: ExtensionFactory = ({ whenReady }) => {
+      const ready = (async () => {
+        await whenReady;
+        await initializeDatabase();
+      })();
+      return { whenReady: ready };
+    };
+
+    // ❌ Bad: Async factory
+    const ext: ExtensionFactory = async ({ whenReady }) => {
+      await whenReady; // Error: factory must be sync!
+      return {};
+    };
+    ```
+  </Accordion>
+
+  <Accordion title="Clean up resources">
+    Always implement `destroy` for cleanup:
+    
+    ```typescript
+    const ext: ExtensionFactory = () => {
+      const ws = new WebSocket('wss://...');
+      const timer = setInterval(() => {}, 1000);
+      
+      return {
+        destroy: () => {
+          ws.close();
+          clearInterval(timer);
+        },
+      };
+    };
+    ```
+  </Accordion>
+
+  <Accordion title="Handle errors gracefully">
+    Don't throw from factories. Return error state instead:
+    
+    ```typescript
+    const ext: ExtensionFactory = ({ tables }) => {
+      let error: Error | null = null;
+
+      const ready = (async () => {
+        try {
+          await initialize();
+        } catch (e) {
+          error = e as Error;
+        }
+      })();
+
+      return {
+        error: () => error,
+        whenReady: ready,
+      };
+    };
+    ```
+  </Accordion>
+
+  <Accordion title="Document your exports">
+    Add JSDoc comments for autocomplete:
+    
+    ```typescript
+    const analytics: ExtensionFactory = () => {
+      return {
+        /**
+         * Get all tracked events.
+         * @returns Array of events sorted by timestamp
+         */
+        getEvents: () => [],
+
+        /**
+         * Clear all tracked events.
+         */
+        clearEvents: () => {},
+      };
+    };
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Testing Extensions
+
+Test extensions in isolation:
+
+```typescript
+import { test, expect } from 'bun:test';
+import { createWorkspace, defineWorkspace } from '@epicenter/workspace';
+
+test('analytics tracks events', async () => {
+  const definition = defineWorkspace({
+    id: 'test',
+    tables: { posts: defineTable(type({ id: 'string', title: 'string', _v: '1' })) },
+  });
+
+  const client = createWorkspace(definition)
+    .withExtension('analytics', analytics);
+
+  await client.whenReady;
+
+  // Make changes
+  client.tables.posts.set({ id: '1', title: 'Test', _v: 1 });
+
+  // Assert events
+  const events = client.extensions.analytics.getEvents();
+  expect(events).toHaveLength(1);
+  expect(events[0].type).toBe('posts_changed');
+
+  await client.destroy();
+});
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Extension Examples" icon="code" href="https://github.com/EpicenterHQ/epicenter/tree/main/examples">
+    Browse example extensions on GitHub
+  </Card>
+  <Card title="SQLite Extension" icon="database" href="/extensions/sqlite">
+    Study the SQLite extension source
+  </Card>
+  <Card title="Sync Extension" icon="arrows-rotate" href="/extensions/sync">
+    Study the sync extension source
+  </Card>
+  <Card title="API Reference" icon="book" href="/api/extension-factory">
+    Full ExtensionFactory API docs
+  </Card>
+</CardGroup>

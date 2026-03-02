@@ -1,0 +1,521 @@
+---
+title: Markdown Persistence
+description: Setting up the markdown provider for human-readable file persistence
+---
+
+The markdown extension persists your YJS data as human-readable markdown files with YAML frontmatter. This enables version control, manual editing, and integration with static site generators.
+
+## How It Works
+
+The markdown extension:
+
+1. **Auto-syncs** bidirectionally between YJS and markdown files
+2. **Watches** directories for file changes (create, update, delete, rename)
+3. **Validates** all files on startup and logs errors
+4. **Maintains** rowId ↔ filename mapping for renames
+5. **Prevents** infinite loops with sync coordination flags
+
+<Note>
+  YJS remains the source of truth. Markdown files are a human-readable mirror.
+</Note>
+
+## Setup
+
+Add the markdown extension when creating your workspace client:
+
+```typescript
+import { createWorkspace } from '@epicenter/workspace';
+import { markdownExtension } from '@epicenter/workspace/extensions';
+import { blogWorkspace } from './workspace';
+
+const client = createWorkspace(blogWorkspace)
+  .withExtension('markdown', (context) =>
+    markdownExtension(context, {
+      directory: './content',
+      tableConfigs: {
+        posts: {
+          directory: './content/posts',
+          serialize: ({ row }) => ({
+            frontmatter: {
+              title: row.title,
+              published: row.published,
+              date: row.publishedAt,
+            },
+            body: row.content || '',
+            filename: `${row.id}.md`,
+          }),
+          deserialize: ({ frontmatter, body, filename }) => {
+            const id = basename(filename, '.md');
+            return Ok({
+              id,
+              title: frontmatter.title,
+              content: body,
+              published: frontmatter.published ?? false,
+              publishedAt: frontmatter.date ?? null,
+              _v: 1,
+            });
+          },
+        },
+      },
+    })
+  );
+```
+
+## Extension Exports
+
+The markdown extension provides:
+
+```typescript
+client.extensions.markdown = {
+  // Sync operations
+  pullToMarkdown: () => void,     // YJS → Markdown (replace all)
+  pushFromMarkdown: () => void,   // Markdown → YJS (replace all)
+  
+  // Validation
+  scanForErrors: () => void,      // Rebuild diagnostics file
+}
+```
+
+## Default Serialization
+
+If you don't provide custom serialization, the extension uses defaults:
+
+<CodeGroup>
+```typescript Default Behavior
+// Frontmatter: All fields except 'content'
+// Body: The 'content' field (if it exists)
+// Filename: {id}.md
+
+// Input row:
+{
+  id: '123',
+  title: 'Hello World',
+  content: 'Post content here',
+  published: true,
+  _v: 1,
+}
+
+// Output file (123.md):
+/*
+---
+title: Hello World
+published: true
+_v: 1
+---
+Post content here
+*/
+```
+
+```typescript Custom Serialization
+serialize: ({ row }) => ({
+  frontmatter: {
+    title: row.title,
+    date: row.publishedAt,
+    tags: row.tags,
+  },
+  body: row.content || '',
+  filename: `${row.slug}.md`,  // Use slug instead of ID
+})
+```
+</CodeGroup>
+
+## Custom Serialization
+
+### Blog Posts Example
+
+```typescript
+import { basename } from 'node:path';
+import { Ok, Err } from 'wellcrafted';
+
+tableConfigs: {
+  posts: {
+    directory: './content/posts',
+    
+    serialize: ({ row }) => ({
+      frontmatter: {
+        title: row.title,
+        published: row.published,
+        publishedAt: row.publishedAt,
+        category: row.category,
+        views: row.views,
+      },
+      body: row.content || '',
+      filename: `${row.id}.md`,
+    }),
+    
+    deserialize: ({ frontmatter, body, filename }) => {
+      const id = basename(filename, '.md');
+      
+      // Validate required fields
+      if (!frontmatter.title) {
+        return Err({
+          tag: 'MarkdownProviderError',
+          message: 'Missing required field: title',
+          context: { filename },
+        });
+      }
+      
+      return Ok({
+        id,
+        title: frontmatter.title,
+        content: body,
+        published: frontmatter.published ?? false,
+        publishedAt: frontmatter.publishedAt ?? null,
+        category: frontmatter.category ?? 'tech',
+        views: frontmatter.views ?? 0,
+        _v: 1,
+      });
+    },
+  },
+}
+```
+
+### Multi-Table Example
+
+```typescript
+tableConfigs: {
+  posts: {
+    directory: './content/posts',
+    serialize: ({ row }) => ({
+      frontmatter: { title: row.title, published: row.published },
+      body: row.content || '',
+      filename: `${row.id}.md`,
+    }),
+    deserialize: ({ frontmatter, body, filename }) => {
+      const id = basename(filename, '.md');
+      return Ok({ id, ...frontmatter, content: body, _v: 1 });
+    },
+  },
+  
+  pages: {
+    directory: './content/pages',
+    serialize: ({ row }) => ({
+      frontmatter: { title: row.title, slug: row.slug },
+      body: row.body || '',
+      filename: `${row.slug}.md`,  // Use slug for pages
+    }),
+    deserialize: ({ frontmatter, body, filename }) => {
+      const slug = basename(filename, '.md');
+      return Ok({
+        id: slug,
+        slug,
+        title: frontmatter.title,
+        body,
+        _v: 1,
+      });
+    },
+  },
+}
+```
+
+## File Structure
+
+Markdown files are organized by table:
+
+```
+./
+├── content/
+│   ├── posts/
+│   │   ├── post-1.md
+│   │   ├── post-2.md
+│   │   └── post-3.md
+│   └── pages/
+│       ├── about.md
+│       └── contact.md
+└── .epicenter/
+    └── providers/
+        └── markdown/
+            ├── logs/
+            │   └── blog.log          # Sync + error log
+            └── diagnostics/
+                └── blog.json         # Validation errors
+```
+
+<Tip>
+  Add `.epicenter/providers/` to your `.gitignore`. Commit the `content/` directory.
+</Tip>
+
+## File Format Example
+
+```markdown
+---
+title: Getting Started with Epicenter
+published: true
+publishedAt: 2024-01-15T10:00:00Z
+category: tech
+views: 1234
+---
+
+Welcome to Epicenter! This guide will help you get started.
+
+## Installation
+
+```bash
+bun add @epicenter/workspace
+```
+
+## Quick Start
+
+Here's a simple example...
+```
+
+## Error Handling
+
+### Validation Errors
+
+Invalid markdown files are logged but don't block sync:
+
+```typescript
+// Invalid file: missing required field
+// posts/invalid.md
+/*
+---
+published: true
+---
+Content without title
+*/
+
+// Result: Logged to diagnostics, skipped during sync
+```
+
+### Diagnostics File
+
+Validation errors are tracked in `.epicenter/providers/markdown/diagnostics/{workspaceId}.json`:
+
+```json
+{
+  "posts/invalid.md": {
+    "filename": "posts/invalid.md",
+    "error": "Missing required field: title",
+    "timestamp": "2024-01-15T10:30:00Z"
+  }
+}
+```
+
+### Scan for Errors
+
+```typescript
+// Rebuild diagnostics file by re-validating all files
+client.extensions.markdown.scanForErrors();
+
+// Check the diagnostics file
+const diagnostics = await Bun.file(
+  '.epicenter/providers/markdown/diagnostics/blog.json'
+).json();
+
+console.log('Invalid files:', Object.keys(diagnostics));
+```
+
+## Manual Sync Operations
+
+<Warning>
+  Manual sync is rarely needed. The extension auto-syncs bidirectionally.
+</Warning>
+
+### Pull from YJS to Markdown
+
+```typescript
+// Export all YJS data to markdown files (replaces all files)
+client.extensions.markdown.pullToMarkdown();
+```
+
+### Push from Markdown to YJS
+
+```typescript
+// Import all markdown files to YJS (replaces all data)
+client.extensions.markdown.pushFromMarkdown();
+```
+
+## File Watching
+
+The extension watches markdown directories and syncs changes automatically:
+
+- **Create**: New file → New row in YJS
+- **Update**: File modified → Row updated in YJS
+- **Delete**: File deleted → Row deleted from YJS
+- **Rename**: File renamed → Filename mapping updated, row preserved
+
+<Note>
+  File renames preserve the row ID using an internal mapping. The `id` field in frontmatter is ignored.
+</Note>
+
+## Production Example
+
+Here's a complete setup for a blog with markdown persistence:
+
+```typescript
+import { createWorkspace } from '@epicenter/workspace';
+import { markdownExtension } from '@epicenter/workspace/extensions';
+import { defineWorkspace, defineTable } from '@epicenter/workspace';
+import { type } from 'arktype';
+import { basename } from 'node:path';
+import { Ok, Err } from 'wellcrafted';
+
+const blogWorkspace = defineWorkspace({
+  id: 'blog',
+  tables: {
+    posts: defineTable(
+      type({
+        id: 'string',
+        title: 'string',
+        content: 'string | null',
+        published: 'boolean',
+        publishedAt: 'string | null',
+        category: "'tech' | 'personal'",
+        tags: 'string[]',
+        _v: '1',
+      })
+    ),
+  },
+});
+
+const client = createWorkspace(blogWorkspace)
+  .withExtension('markdown', (context) =>
+    markdownExtension(context, {
+      directory: './content',
+      tableConfigs: {
+        posts: {
+          directory: './content/posts',
+          
+          serialize: ({ row }) => {
+            // Custom slug generation
+            const slug = row.title
+              .toLowerCase()
+              .replace(/[^a-z0-9]+/g, '-')
+              .replace(/^-|-$/g, '');
+            
+            return {
+              frontmatter: {
+                title: row.title,
+                published: row.published,
+                publishedAt: row.publishedAt,
+                category: row.category,
+                tags: row.tags,
+              },
+              body: row.content || '',
+              filename: `${slug}.md`,
+            };
+          },
+          
+          deserialize: ({ frontmatter, body, filename }) => {
+            // Extract ID from filename
+            const id = basename(filename, '.md');
+            
+            // Validate required fields
+            if (!frontmatter.title) {
+              return Err({
+                tag: 'MarkdownProviderError',
+                message: 'Missing required field: title',
+                context: { filename },
+              });
+            }
+            
+            if (!frontmatter.category || 
+                !['tech', 'personal'].includes(frontmatter.category)) {
+              return Err({
+                tag: 'MarkdownProviderError',
+                message: 'Invalid category (must be tech or personal)',
+                context: { filename, category: frontmatter.category },
+              });
+            }
+            
+            return Ok({
+              id,
+              title: frontmatter.title,
+              content: body,
+              published: frontmatter.published ?? false,
+              publishedAt: frontmatter.publishedAt ?? null,
+              category: frontmatter.category,
+              tags: frontmatter.tags ?? [],
+              _v: 1,
+            });
+          },
+        },
+      },
+    })
+  );
+
+// Auto-syncs both ways!
+const postId = '123';
+
+// Write to YJS → Auto-exports to markdown
+client.tables.posts.set({
+  id: postId,
+  title: 'Hello World',
+  content: 'My first post',
+  published: true,
+  publishedAt: new Date().toISOString(),
+  category: 'tech',
+  tags: ['tutorial', 'getting-started'],
+  _v: 1,
+});
+
+// Edit markdown file manually → Auto-imports to YJS
+// (Just edit ./content/posts/hello-world.md)
+```
+
+## Integration with Static Site Generators
+
+### Astro
+
+```typescript
+// astro.config.mjs
+export default defineConfig({
+  markdown: {
+    remarkPlugins: [],
+  },
+});
+
+// src/content/config.ts
+import { defineCollection, z } from 'astro:content';
+
+const posts = defineCollection({
+  schema: z.object({
+    title: z.string(),
+    published: z.boolean(),
+    publishedAt: z.string().nullable(),
+    category: z.enum(['tech', 'personal']),
+    tags: z.array(z.string()),
+  }),
+});
+
+export const collections = { posts };
+```
+
+### Next.js (App Router)
+
+```typescript
+// app/blog/[slug]/page.tsx
+import { readFileSync, readdirSync } from 'fs';
+import matter from 'gray-matter';
+
+export async function generateStaticParams() {
+  const files = readdirSync('./content/posts');
+  return files.map((filename) => ({
+    slug: filename.replace('.md', ''),
+  }));
+}
+
+export default function Post({ params }: { params: { slug: string } }) {
+  const content = readFileSync(`./content/posts/${params.slug}.md`, 'utf-8');
+  const { data, content: body } = matter(content);
+  
+  return (
+    <article>
+      <h1>{data.title}</h1>
+      <div dangerouslySetInnerHTML={{ __html: body }} />
+    </article>
+  );
+}
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Multi-Device Sync" icon="arrows-rotate" href="/guides/multi-device-sync">
+    Sync data across devices with WebSockets
+  </Card>
+  <Card title="Error Handling" icon="triangle-exclamation" href="/guides/error-handling">
+    Handle Result types and validation errors
+  </Card>
+</CardGroup>

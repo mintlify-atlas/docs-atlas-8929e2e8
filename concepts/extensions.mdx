@@ -1,0 +1,462 @@
+---
+title: "Extensions"
+description: "Extension system, provider context, and how extensions work"
+icon: "puzzle-piece"
+---
+
+## What are extensions?
+
+Extensions add capabilities to your workspace, such as:
+
+- **Persistence** - Save Y.Doc to disk or IndexedDB
+- **Sync** - Real-time synchronization across devices
+- **Query layers** - SQLite for SQL queries, custom indexes
+- **Export** - Markdown files, CSV, JSON
+- **Custom logic** - Authentication, analytics, webhooks
+
+Extensions are optional, composable, and type-safe.
+
+## Core extension types
+
+Epicenter provides several built-in extensions:
+
+### Persistence extension
+
+Saves Y.Doc to filesystem (Node.js) or IndexedDB (browser):
+
+```typescript
+import { setupPersistence } from '@epicenter/workspace/providers';
+
+const client = createWorkspace(workspace)
+  .withExtension('persistence', setupPersistence);
+```
+
+Storage locations:
+- **Node.js**: `.epicenter/providers/persistence/{workspaceId}.yjs`
+- **Browser**: `IndexedDB:{workspaceId}`
+
+<Info>
+The persistence extension auto-saves on every change. No manual save operations needed.
+</Info>
+
+### SQLite extension
+
+Enables SQL queries via Drizzle ORM:
+
+```typescript
+import { sqliteProvider } from '@epicenter/workspace';
+
+const client = createWorkspace(workspace)
+  .withExtension('sqlite', (c) => sqliteProvider(c));
+
+// Query with full SQL power
+const published = await client.extensions.sqlite.posts
+  .select()
+  .where(eq(client.extensions.sqlite.posts.published, true))
+  .orderBy(desc(client.extensions.sqlite.posts.views));
+```
+
+See the [SQLite extension guide](/extensions/sqlite) for detailed usage.
+
+### Markdown extension
+
+Persists data as human-readable markdown files:
+
+```typescript
+import { markdownProvider } from '@epicenter/workspace';
+
+const client = createWorkspace(workspace)
+  .withExtension('markdown', (c) => markdownProvider(c, {
+    tableConfigs: {
+      posts: {
+        directory: './posts',
+        serialize: ({ row }) => ({
+          frontmatter: { title: row.title, published: row.published },
+          body: row.content,
+          filename: `${row.id}.md`,
+        }),
+      },
+    },
+  }));
+```
+
+See the [Markdown extension guide](/extensions/markdown) for configuration options.
+
+### Sync extension
+
+Real-time Y.Doc synchronization via WebSocket:
+
+```typescript
+import { createSyncExtension } from '@epicenter/workspace/extensions/sync';
+
+const client = createWorkspace(workspace)
+  .withExtension('sync', createSyncExtension({
+    url: 'ws://localhost:3913/rooms/{id}',
+  }));
+```
+
+The `{id}` placeholder is replaced with the workspace ID automatically.
+
+See the [Multi-device sync guide](/guides/multi-device-sync) for topology patterns.
+
+## Extension context
+
+Extension factories receive a context object with:
+
+```typescript
+type ExtensionContext = {
+  id: string;                    // Workspace ID
+  ydoc: Y.Doc;                   // The Y.Doc instance
+  tables: Tables;                // Table helpers (typed)
+  kv: KvStore;                   // KV store helpers (typed)
+  awareness: Awareness;          // Awareness for presence
+  extensions: Record<string, T>; // Previously added extensions (typed)
+  whenReady: Promise<void>;      // Composite whenReady of prior extensions
+};
+```
+
+### Example: Custom analytics extension
+
+```typescript
+const analyticsExtension = ({ id, tables, whenReady }: ExtensionContext) => {
+  // Wait for prior extensions
+  const init = whenReady.then(() => {
+    console.log(`Analytics initialized for workspace: ${id}`);
+  });
+
+  // Track post views
+  const trackView = (postId: string) => {
+    const result = tables.posts.get(postId);
+    if (result.status === 'valid') {
+      tables.posts.update(postId, {
+        views: result.row.views + 1,
+      });
+    }
+  };
+
+  return {
+    trackView,
+    whenReady: init,
+    destroy: () => console.log('Analytics cleanup'),
+  };
+};
+
+const client = createWorkspace(workspace)
+  .withExtension('analytics', analyticsExtension);
+
+// Use the extension
+client.extensions.analytics.trackView('post-1');
+```
+
+## Extension lifecycle
+
+Extensions follow a predictable lifecycle:
+
+### Initialization
+
+Extension factories run synchronously during client creation:
+
+```typescript
+const client = createWorkspace(workspace)
+  .withExtension('persistence', setupPersistence)  // Runs immediately
+  .withExtension('sqlite', sqliteProvider)         // Has access to persistence
+  .withExtension('sync', createSyncExtension(...)); // Has access to both
+```
+
+Each extension can access previously added extensions via the context.
+
+### Async initialization
+
+Return `whenReady` for async initialization:
+
+```typescript
+const dbExtension = ({ id }) => {
+  const db = new Database(`${id}.db`);
+  
+  return {
+    db,
+    whenReady: db.initialize(), // Promise that resolves when ready
+    destroy: () => db.close(),
+  };
+};
+```
+
+Wait for all extensions:
+
+```typescript
+const client = createWorkspace(workspace)
+  .withExtension('db', dbExtension);
+
+await client.whenReady;  // Waits for all extensions
+```
+
+### Cleanup
+
+Extensions are destroyed in LIFO order (last added = first destroyed):
+
+```typescript
+await client.destroy();
+// Calls sync.destroy(), then sqlite.destroy(), then persistence.destroy()
+```
+
+<Warning>
+Always call `destroy()` or use `await using` to prevent resource leaks.
+</Warning>
+
+## Extension exports
+
+Extensions can export any values or functions:
+
+```typescript
+const customExtension = ({ tables }) => {
+  const getStats = () => ({
+    total: tables.posts.count(),
+    published: tables.posts.filter(p => p.published).length,
+  });
+
+  const publish = (id: string) => {
+    tables.posts.update(id, { published: true });
+  };
+
+  return {
+    getStats,
+    publish,
+    // Optional lifecycle hooks
+    whenReady: Promise.resolve(),
+    destroy: () => {},
+  };
+};
+
+const client = createWorkspace(workspace)
+  .withExtension('custom', customExtension);
+
+// Access exports (fully typed)
+const stats = client.extensions.custom.getStats();
+client.extensions.custom.publish('post-1');
+```
+
+## Composing extensions
+
+Extensions receive previously added extensions in the context:
+
+```typescript
+const cacheExtension = ({ extensions }) => {
+  // Access SQLite extension from prior extension
+  const db = extensions.sqlite?.db;
+  
+  if (!db) {
+    console.warn('SQLite not available, cache disabled');
+    return; // Return void to skip registration
+  }
+
+  const cache = new Map();
+  
+  return {
+    get: (key: string) => cache.get(key),
+    set: (key: string, value: unknown) => cache.set(key, value),
+  };
+};
+
+const client = createWorkspace(workspace)
+  .withExtension('sqlite', sqliteProvider)
+  .withExtension('cache', cacheExtension);  // Has access to sqlite
+```
+
+<Tip>
+Return `void` from a factory to skip extension registration. Useful for conditional extensions.
+</Tip>
+
+## Extension patterns
+
+### Observer extension
+
+Listen to changes and react:
+
+```typescript
+const webhookExtension = ({ tables }: ExtensionContext) => {
+  const unsubscribe = tables.posts.observe((changedIds) => {
+    for (const id of changedIds) {
+      const result = tables.posts.get(id);
+      if (result.status === 'valid' && result.row.published) {
+        fetch('https://webhook.site/...', {
+          method: 'POST',
+          body: JSON.stringify(result.row),
+        });
+      }
+    }
+  });
+
+  return {
+    destroy: unsubscribe,
+  };
+};
+```
+
+### Filesystem extension
+
+Write data to custom file formats:
+
+```typescript
+const csvExtension = ({ id, tables }: ExtensionContext) => {
+  const exportToCsv = async () => {
+    const posts = tables.posts.getAllValid();
+    const csv = posts.map(p => `${p.id},${p.title},${p.views}`).join('\n');
+    await Bun.write(`${id}.csv`, csv);
+  };
+
+  return { exportToCsv };
+};
+```
+
+### Authentication extension
+
+```typescript
+const authExtension = ({ id }: ExtensionContext) => {
+  const tokenPath = `.epicenter/providers/auth/${id}-token.json`;
+  
+  const getToken = async () => {
+    const file = await Bun.file(tokenPath).text();
+    return JSON.parse(file).token;
+  };
+
+  const setToken = async (token: string) => {
+    await Bun.write(tokenPath, JSON.stringify({ token }));
+  };
+
+  return { getToken, setToken };
+};
+```
+
+## Extension storage paths
+
+Extensions get isolated storage directories:
+
+```typescript
+const myExtension = ({ id }: ExtensionContext) => {
+  const basePath = `.epicenter/providers/myExtension`;
+  const dataPath = `${basePath}/${id}.json`;
+  const logPath = `${basePath}/logs/${id}.log`;
+
+  // Use these paths for extension-specific files
+};
+```
+
+Recommended structure:
+
+```
+.epicenter/providers/
+└── myExtension/
+    ├── workspace1.json       # Main data file
+    ├── workspace2.json
+    ├── logs/
+    │   ├── workspace1.log    # Logs per workspace
+    │   └── workspace2.log
+    └── diagnostics/
+        └── workspace1.json   # Diagnostics/metadata
+```
+
+<Note>
+Extension storage is automatically gitignored when using `.epicenter/providers/` paths.
+</Note>
+
+## Multiple extensions of the same type
+
+You can add multiple sync extensions for multi-device topology:
+
+```typescript
+const client = createWorkspace(workspace)
+  .withExtension('syncDesktop', createSyncExtension({ 
+    url: 'ws://desktop:3913/rooms/{id}' 
+  }))
+  .withExtension('syncLaptop', createSyncExtension({ 
+    url: 'ws://laptop:3913/rooms/{id}' 
+  }))
+  .withExtension('syncCloud', createSyncExtension({ 
+    url: 'wss://cloud.example.com/rooms/{id}' 
+  }));
+```
+
+All sync extensions operate simultaneously—changes merge via CRDTs.
+
+## Conditional extensions
+
+Return `void` to skip extension registration:
+
+```typescript
+const syncExtension = ({ id }: ExtensionContext) => {
+  const syncUrl = process.env.SYNC_URL;
+  
+  if (!syncUrl) {
+    console.log('Sync disabled: SYNC_URL not set');
+    return; // Skip registration
+  }
+
+  return createSyncExtension({ url: syncUrl })({ id });
+};
+```
+
+## Best practices
+
+<AccordionGroup>
+  <Accordion title="Return void for optional extensions">
+    ```typescript
+    const optionalExtension = ({ extensions }: ExtensionContext) => {
+      if (!extensions.dependency) {
+        console.warn('Dependency not available');
+        return; // Skip registration
+      }
+      return { /* exports */ };
+    };
+    ```
+  </Accordion>
+  
+  <Accordion title="Use whenReady for async initialization">
+    ```typescript
+    const dbExtension = () => {
+      const db = new Database();
+      return {
+        db,
+        whenReady: db.initialize(),
+        destroy: () => db.close(),
+      };
+    };
+    ```
+  </Accordion>
+  
+  <Accordion title="Always provide destroy() for cleanup">
+    ```typescript
+    const extension = ({ tables }) => {
+      const unsubscribe = tables.posts.observe(() => {});
+      return {
+        destroy: unsubscribe,  // Critical for cleanup
+      };
+    };
+    ```
+  </Accordion>
+  
+  <Accordion title="Access prior extensions via context">
+    ```typescript
+    const enhancedExtension = ({ extensions }: ExtensionContext) => {
+      const db = extensions.sqlite?.db;
+      // Build on top of prior extensions
+    };
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="SQLite extension" icon="database" href="/extensions/sqlite">
+    SQL queries with Drizzle ORM
+  </Card>
+  <Card title="Markdown extension" icon="file-lines" href="/extensions/markdown">
+    Human-readable file persistence
+  </Card>
+  <Card title="Sync extension" icon="arrow-right-arrow-left" href="/extensions/sync">
+    Real-time multi-device sync
+  </Card>
+  <Card title="Custom extensions" icon="code" href="/extensions/custom">
+    Build your own extensions
+  </Card>
+</CardGroup>

@@ -1,0 +1,140 @@
+---
+title: "Introduction"
+description: "YJS-First Collaborative Workspace System for Real-Time, Local-First Applications"
+---
+
+<img className="block" src="/images/hero.png" alt="Epicenter Hero" />
+
+## Welcome to Epicenter
+
+Epicenter is a unified workspace architecture built on YJS for real-time collaboration with optional persistence and query layers. It enables you to build local-first, offline-capable applications with conflict-free data synchronization.
+
+## Core Philosophy
+
+### YJS Document as Source of Truth
+
+Epicenter uses YJS documents as the single source of truth for all data. YJS provides:
+
+- **CRDT-based conflict-free merging** - Multiple users can edit simultaneously without conflicts
+- **Real-time collaborative editing** - Changes sync instantly across all connected clients
+- **Built-in undo/redo** - Full operation history at no extra cost
+- **Efficient binary encoding** - Minimal network overhead and storage
+
+### Unified Extensions for Querying and Persistence
+
+Extensions are capabilities that can mirror YJS data:
+
+- **SQLite Extension** - Enables SQL queries via Drizzle ORM for complex filtering and aggregations
+- **Markdown Extension** - Persists data as human-readable markdown files
+- **Sync Extension** - Real-time multi-device synchronization via WebSocket
+- **Custom Extensions** - Build your own (vector search, full-text search, etc.)
+
+Extensions auto-sync bidirectionally with YJS. They're completely optional—you can use just YJS, just SQLite, both, or build custom extensions.
+
+### Pure JSON Table Schemas
+
+Table definitions use Standard Schema (ArkType, Zod, etc.) instead of builder functions. This enables:
+
+- **Serialization** for MCP/OpenAPI integration
+- **Runtime introspection** for tooling and code generation
+- **Type-safe conversions** to validation schemas
+
+## Key Features
+
+<CardGroup cols={2}>
+  <Card title="Local-First" icon="laptop">
+    Everything works offline. Data lives in plain files (`.yjs`, SQLite, markdown) that you fully control. Sync when you're ready.
+  </Card>
+  
+  <Card title="Real-Time Collaboration" icon="users">
+    Multiple users can edit the same data simultaneously. CRDTs ensure eventual consistency without conflicts.
+  </Card>
+  
+  <Card title="Flexible Persistence" icon="database">
+    Choose your persistence strategy: IndexedDB, filesystem, SQLite, markdown, or any combination.
+  </Card>
+  
+  <Card title="Powerful Queries" icon="magnifying-glass">
+    Use SQL via Drizzle ORM for complex queries while maintaining CRDT benefits.
+  </Card>
+  
+  <Card title="Multi-Device Sync" icon="sync">
+    Sync across unlimited devices simultaneously. Works peer-to-peer or through relay servers.
+  </Card>
+  
+  <Card title="Type-Safe APIs" icon="shield-check">
+    Full TypeScript support with inferred types from your schemas. Catch errors at compile time.
+  </Card>
+</CardGroup>
+
+## Architecture Overview
+
+Epicenter follows a three-layer data flow:
+
+```
+┌────────────────────────────────────────────────────────────────────┐
+│  WRITE FLOW                                                         │
+│                                                                     │
+│  Action Called → Y.Doc Updated → Auto-sync to Extensions           │
+│                       │                                             │
+│              ┌────────┼────────┐                                    │
+│              ▼        ▼        ▼                                    │
+│         IndexedDB  SQLite   Markdown                                │
+│         (or .yjs)   (.db)   (files)                                 │
+└────────────────────────────────────────────────────────────────────┘
+
+┌────────────────────────────────────────────────────────────────────┐
+│  READ FLOW                                                          │
+│                                                                     │
+│  Query Called → Read from Extension (SQLite for complex queries)   │
+│                 or directly from Y.Doc (simple lookups)             │
+└────────────────────────────────────────────────────────────────────┘
+```
+
+## Get Started
+
+Ready to build your first Epicenter workspace? Choose your path:
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Build a working workspace in 5 minutes with tables and actions
+  </Card>
+  
+  <Card title="Installation" icon="download" href="/installation">
+    Install Epicenter and set up your development environment
+  </Card>
+  
+  <Card title="Core Concepts" icon="book" href="/concepts/architecture">
+    Understand workspaces, tables, extensions, and the data flow
+  </Card>
+  
+  <Card title="API Reference" icon="code" href="/api-reference/introduction">
+    Explore the full API documentation and type signatures
+  </Card>
+</CardGroup>
+
+## Use Cases
+
+Epicenter is perfect for:
+
+- **Collaborative editors** - Build Google Docs-style applications
+- **Local-first apps** - Applications that work offline and sync when ready
+- **Desktop applications** - Tauri/Electron apps with embedded databases
+- **AI agent tools** - Expose workspaces via MCP for AI assistant integration
+- **Multi-device workflows** - Sync data across phone, laptop, and desktop
+
+## Community
+
+<CardGroup cols={2}>
+  <Card title="GitHub" icon="github" href="https://github.com/EpicenterHQ/epicenter">
+    Star the repo, report issues, and contribute
+  </Card>
+  
+  <Card title="Examples" icon="code" href="https://github.com/EpicenterHQ/epicenter/tree/main/examples">
+    Browse real-world examples and starter templates
+  </Card>
+</CardGroup>
+
+<Note>
+  Epicenter follows the **local-first** philosophy: your data lives on your device, syncs opportunistically, and you maintain full control.
+</Note>

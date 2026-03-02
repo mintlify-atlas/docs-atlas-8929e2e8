@@ -1,0 +1,312 @@
+---
+title: Features
+description: Voice Activity Detection, AI transformations, custom shortcuts, and more
+---
+
+Whispering offers powerful features to enhance your transcription workflow.
+
+## Voice Activity Detection (VAD)
+
+Hands-free recording that starts when you speak and stops when you're done. No need to hold keys or click buttons.
+
+### How It Works
+
+1. Press shortcut once → VAD starts listening
+2. Speak → Recording begins automatically
+3. Stop speaking → Recording stops after a brief pause
+4. Your transcription appears instantly
+
+### Enable VAD
+
+<Tabs>
+  <Tab title="Quick Toggle">
+    On the homepage, click the **Voice Activated** tab (next to Manual).
+  </Tab>
+
+  <Tab title="Settings">
+    1. Go to **Settings** → **Recording**
+    2. Find the **Recording Mode** dropdown
+    3. Select **Voice Activated** instead of Manual
+  </Tab>
+</Tabs>
+
+<Tip>
+Voice Activated mode is perfect for dictation without holding keys! It's especially useful on macOS where App Nap can suspend background apps.
+</Tip>
+
+## AI Transformations
+
+Transform your transcriptions automatically with custom AI workflows. Fix grammar, translate languages, reformat text, or create completely custom transformations.
+
+### Quick Example: Format Text
+
+<Steps>
+  <Step title="Create transformation">
+    1. Go to **Transformations** (📚) in the top bar
+    2. Click "Create Transformation"
+    3. Name it "Format Text"
+  </Step>
+
+  <Step title="Add Prompt Transform step">
+    1. Add a **Prompt Transform** step
+    2. Select model: `Claude Sonnet 3.5` (or your preferred AI)
+    3. Add system prompt (see example below)
+    4. Add user prompt with `{{input}}` variable
+  </Step>
+
+  <Step title="Save and activate">
+    Save the transformation and select it in your recording settings.
+  </Step>
+</Steps>
+
+### Example System Prompt
+
+```
+You are an intelligent text formatter specializing in cleaning up transcribed speech.
+Your task is to transform raw transcribed text into well-formatted, readable content
+while maintaining the speaker's original intent and voice.
+
+Core Principles:
+1. Preserve authenticity: Keep the original wording and phrasing as much as possible
+2. Add clarity: Make intelligent corrections only where needed for comprehension
+3. Enhance readability: Apply proper formatting, punctuation, and structure
+
+Formatting Guidelines:
+- Add appropriate punctuation (periods, commas, question marks)
+- Correct obvious transcription errors while preserving speaking style
+- Fix run-on sentences by adding natural breaks
+- Remove excessive filler words (um, uh) unless they add meaning
+- Preserve humor, sarcasm, and emotional tone
+```
+
+### Example User Prompt
+
+```
+Here is the text to format:
+
+<text>{{input}}</text>
+```
+
+### What Can Transformations Do?
+
+<CardGroup cols={2}>
+  <Card title="Fix Grammar" icon="spell-check">
+    Automatically correct grammar and punctuation
+  </Card>
+  <Card title="Translate" icon="language">
+    Convert to other languages
+  </Card>
+  <Card title="Format" icon="align-left">
+    Convert casual speech to professional writing
+  </Card>
+  <Card title="Summarize" icon="list">
+    Create summaries or bullet points
+  </Card>
+  <Card title="Clean Up" icon="eraser">
+    Remove filler words ("um", "uh")
+  </Card>
+  <Card title="Chain Steps" icon="link">
+    Combine multiple transformations
+  </Card>
+</CardGroup>
+
+### Example Workflow
+
+```
+Speech → Transcribe → Fix Grammar → Translate to Spanish → Copy to clipboard
+```
+
+### Supported AI Providers
+
+Transformations work with multiple AI providers:
+
+<Tabs>
+  <Tab title="Anthropic">
+    **Get API Key:** [console.anthropic.com/settings/keys](https://console.anthropic.com/settings/keys)
+
+    **Models:**
+    - `claude-opus-4-0`
+    - `claude-sonnet-4-0`
+    - `claude-3-7-sonnet-latest`
+
+    **Why:** Excellent writing quality, nuanced understanding
+  </Tab>
+
+  <Tab title="OpenAI">
+    **Get API Key:** [platform.openai.com/api-keys](https://platform.openai.com/api-keys)
+
+    **Models:**
+    - `gpt-4o`
+    - `gpt-4o-mini`
+    - `o3-mini`
+
+    **Why:** Most capable, best for complex text transformations
+  </Tab>
+
+  <Tab title="Google Gemini">
+    **Get API Key:** [aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey)
+
+    **Models:**
+    - `gemini-2.5-pro`
+    - `gemini-2.5-flash`
+    - `gemini-2.5-flash-lite`
+
+    **Why:** Free tier available, fast response times
+  </Tab>
+
+  <Tab title="Groq">
+    **Get API Key:** [console.groq.com/keys](https://console.groq.com/keys)
+
+    **Models:**
+    - `llama-3.3-70b-versatile`
+    - `llama-3.1-8b-instant`
+    - `gemma2-9b-it`
+
+    **Why:** Lightning fast inference, great for real-time transformations
+  </Tab>
+
+  <Tab title="Custom (OpenAI-Compatible)">
+    **API Key:** From your provider's settings, if applicable
+
+    **Base URL:** Any OpenAI-compatible `/v1` endpoint
+
+    Examples:
+    - Ollama (local)
+    - LM Studio (local)
+    - vLLM (self-hosted)
+    - Any OpenAI-compatible endpoint
+
+    **Why:** Point Whispering at any self-hosted or private LLMs you want
+  </Tab>
+</Tabs>
+
+## Custom Shortcuts
+
+Change the recording shortcut to whatever feels natural.
+
+<Steps>
+  <Step title="Open shortcut settings">
+    Go to **Settings** → **Recording**
+  </Step>
+
+  <Step title="Set new shortcut">
+    1. Click on the shortcut field
+    2. Press your desired key combination
+  </Step>
+</Steps>
+
+### Popular Choices
+
+- `F1` - Single function key (simple and fast)
+- `Cmd+Shift+Space` - macOS-style
+- `Ctrl+Shift+V` - Similar to paste
+- `Option+R` - Quick and accessible
+
+<Tip>
+Choose a shortcut that doesn't conflict with other apps you use frequently.
+</Tip>
+
+## Transcription Providers
+
+Whispering supports multiple transcription providers, giving you flexibility to choose based on your needs:
+
+### Local Providers (Offline)
+
+<CardGroup cols={2}>
+  <Card title="Whisper C++" icon="house">
+    Fast local transcription with no internet required. Not available on Windows.
+  </Card>
+  <Card title="Parakeet" icon="microchip">
+    NVIDIA's high-performance local transcription engine.
+  </Card>
+  <Card title="Moonshine" icon="moon">
+    Optimized for edge devices and resource-constrained systems.
+  </Card>
+  <Card title="Speaches" icon="server">
+    Self-hosted transcription server for complete control.
+  </Card>
+</CardGroup>
+
+### Cloud Providers (Online)
+
+<CardGroup cols={2}>
+  <Card title="Groq" icon="bolt">
+    Fastest transcription, generous free tier. Recommended.
+  </Card>
+  <Card title="OpenAI" icon="openai">
+    Industry standard, highly accurate models.
+  </Card>
+  <Card title="ElevenLabs" icon="waveform">
+    High-quality voice AI with excellent accuracy.
+  </Card>
+  <Card title="Deepgram" icon="chart-network">
+    Fast, accurate, great pricing with Nova models.
+  </Card>
+  <Card title="Mistral" icon="flag">
+    European AI provider with strong privacy focus.
+  </Card>
+</CardGroup>
+
+## Recording Modes
+
+Whispering offers two recording modes:
+
+### Manual Mode
+
+- Press shortcut to start recording
+- Press shortcut again (or stop button) to stop
+- Full control over recording duration
+- Best for precise control
+
+### Voice Activated Mode
+
+- Press shortcut once to activate
+- Automatically starts when you speak
+- Automatically stops after you finish
+- Hands-free operation
+- Best for quick dictation
+
+## Data Storage
+
+Whispering stores as much data as possible locally on your device:
+
+1. **Local Storage**: Voice recordings and transcriptions are stored in IndexedDB
+2. **Transcription Service**: Audio only sent to your chosen provider (if cloud-based)
+3. **Transformation Service**: Transcribed text sent to AI providers (if using transformations)
+
+<Info>
+You can change both transcription and transformation services in settings to ensure maximum local functionality and privacy.
+</Info>
+
+### Privacy Options
+
+- **Maximum Privacy**: Use Whisper C++ (local) for transcription, no transformations
+- **Balanced**: Use cloud transcription, local-only transformations
+- **Full Features**: Use cloud transcription and cloud AI transformations
+
+### Analytics
+
+Whispering uses anonymized event logging with [Aptabase](https://github.com/aptabase), an open-source, privacy-first analytics service. No personal data is attached to any events.
+
+- View logged events in `analytics.ts` on GitHub
+- Search for `rpc.analytics.logEvent` to see where events are logged
+- Turn off analytics in settings at any time
+
+## Keyboard Shortcuts Reference
+
+| Action | Default Shortcut | Customizable |
+|--------|-----------------|-------------|
+| Start/Stop Recording | `Cmd+Shift+Space` (macOS)<br/>`Ctrl+Shift+Space` (Windows/Linux) | Yes |
+| Open Settings | Click ⚙️ icon | No |
+| Toggle Recording Mode | Click tabs on homepage | No |
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Contributing" icon="code" href="/apps/whispering/contributing">
+    Help build the future of open-source transcription
+  </Card>
+  <Card title="Architecture" icon="sitemap" href="/apps/whispering/contributing#architecture-overview">
+    Learn how Whispering is built
+  </Card>
+</CardGroup>

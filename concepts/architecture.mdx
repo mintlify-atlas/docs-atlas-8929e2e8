@@ -1,0 +1,251 @@
+---
+title: "Architecture"
+description: "Understanding Epicenter's three-layer data flow and Y.Doc as source of truth"
+icon: "diagram-project"
+---
+
+## Overview
+
+Epicenter is built on a **local-first architecture** where Y.Docs serve as the single source of truth for all data. This architecture enables real-time collaboration, offline-first operation, and conflict-free data merging across devices.
+
+## Y.Doc as source of truth
+
+Every workspace has a YJS document that stores all data using Conflict-free Replicated Data Types (CRDTs). This design provides:
+
+- **CRDT-based conflict-free merging** - Multiple users can edit simultaneously without coordination
+- **Real-time collaborative editing** - Changes sync instantly across connected clients  
+- **Built-in undo/redo** - YJS maintains operation history automatically
+- **Efficient binary encoding** - Compact storage and network transfer
+- **Offline-first operation** - Full functionality without network connectivity
+
+### Y.Doc structure
+
+Each workspace's Y.Doc contains Y.Arrays for tables and a key-value store:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                      Y.Doc (CRDT)                            │
+│  ┌───────────────────────────────────────────────────────┐  │
+│  │ Y.Array('table:posts')  <- LWW entries per table      │  │
+│  │   └── { key: id, val: { fields... }, ts: number }     │  │
+│  │                                                        │  │
+│  │ Y.Array('table:users')  <- Another table              │  │
+│  │   └── { key: id, val: { fields... }, ts: number }     │  │
+│  │                                                        │  │
+│  │ Y.Array('kv')  <- Settings as LWW entries             │  │
+│  │   └── { key: name, val: value, ts: number }           │  │
+│  └───────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────┘
+```
+
+<Note>
+Schema definitions are stored in static JSON files, NOT in Y.Doc. This keeps Y.Docs lean and focused on data only.
+</Note>
+
+## Three-layer data flow
+
+Epicenter uses a clear separation between write and read operations:
+
+### Write flow
+
+```
+┌────────────────────────────────────────────────────────────────────┐
+│  WRITE FLOW                                                         │
+│                                                                     │
+│  Action Called → Y.Doc Updated → Auto-sync to Extensions            │
+│                       │                                             │
+│              ┌────────┼────────┐                                    │
+│              ▼        ▼        ▼                                    │
+│         IndexedDB  SQLite   Markdown                                │
+│         (or .yjs)   (.db)   (files)                                 │
+└────────────────────────────────────────────────────────────────────┘
+```
+
+When you write data via actions or table operations:
+
+1. **Y.Doc is updated** - The write goes directly to the YJS document
+2. **Extensions auto-sync** - Observers detect changes and update their stores
+3. **Persistence happens automatically** - No manual save operations needed
+
+### Read flow
+
+```
+┌────────────────────────────────────────────────────────────────────┐
+│  READ FLOW                                                          │
+│                                                                     │
+│  Query Called → Read from Extension (SQLite for complex queries)    │
+│                 or directly from Y.Doc (simple lookups)             │
+└────────────────────────────────────────────────────────────────────┘
+```
+
+Reads can happen from:
+
+- **Y.Doc directly** - Fast lookups via `client.tables.posts.get(id)`
+- **SQLite extension** - Complex queries with joins, aggregations, full-text search
+- **Custom extensions** - Vector search, graph queries, or any specialized index
+
+<Tip>
+Use Y.Doc for simple CRUD operations. Use extensions like SQLite when you need filtering, sorting, or aggregations.
+</Tip>
+
+## Local-first philosophy
+
+Epicenter embraces local-first principles:
+
+- **Everything works offline** - Full application functionality without internet
+- **Data lives in files you control** - `.yjs`, `.db`, and markdown files on your filesystem
+- **Sync is opportunistic** - Connect to sync when available, work locally when not
+- **Eventual consistency** - CRDTs ensure all devices converge to the same state
+
+## Multi-device sync topology
+
+Epicenter supports distributed sync where Y.Doc instances replicate across devices via y-websocket:
+
+```
+   PHONE                   LAPTOP                    DESKTOP
+   ┌──────────┐           ┌──────────┐              ┌──────────┐
+   │ Browser  │           │ Browser  │              │ Browser  │
+   │ Y.Doc    │           │ Y.Doc    │              │ Y.Doc    │
+   └────┬─────┘           └────┬─────┘              └────┬─────┘
+        │                      │                         │
+   (no server)            ┌────▼─────┐              ┌────▼─────┐
+        │                 │ Elysia   │◄────────────►│ Elysia   │
+        │                 │ :3913    │  server-to-  │ :3913    │
+        │                 └────┬─────┘    server    └────┬─────┘
+        │                      │                         │
+        └──────────────────────┴─────────────────────────┘
+                           Connect to multiple nodes
+```
+
+<Info>
+YJS supports multiple sync providers simultaneously. A phone can connect to desktop, laptop, AND cloud—changes merge automatically via CRDTs.
+</Info>
+
+## Client initialization lifecycle
+
+When you create a workspace client, here's what happens:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ 1. CREATE Y.Doc (CRDT data structure)                       │
+│    • Unique document ID = workspace ID                      │
+│    • In-memory collaborative data structure                 │
+└─────────────────────────────────────────────────────────────┘
+                           │
+                           ▼
+┌─────────────────────────────────────────────────────────────┐
+│ 2. INITIALIZE TABLES                                        │
+│    • Create YJS-backed table operations                     │
+│    • Set up runtime validators from schema                  │
+└─────────────────────────────────────────────────────────────┘
+                           │
+                           ▼
+┌─────────────────────────────────────────────────────────────┐
+│ 3. INITIALIZE EXTENSIONS                                     │
+│    • Run extension factories (SQLite, markdown, etc.)        │
+│    • Extensions receive YDoc, tables, paths, validators      │
+│    • Loads existing state, starts auto-sync                 │
+└─────────────────────────────────────────────────────────────┘
+                           │
+                           ▼
+┌─────────────────────────────────────────────────────────────┐
+│ 4. RETURN WORKSPACE CLIENT                                   │
+│    • client.id - workspace ID                               │
+│    • client.tables - YJS table operations                   │
+│    • client.extensions - extension exports                  │
+│    • client.destroy() - cleanup resources                   │
+└─────────────────────────────────────────────────────────────┘
+```
+
+## Storage context
+
+Each client instance writes to a **storage context** determined by:
+
+- **Directory** - Where the script runs (affects `.epicenter/` path)
+- **Environment** - Browser (IndexedDB) vs Node (filesystem)  
+- **Workspace ID** - The specific workspace being accessed
+
+```
+Storage Context = Directory + Environment + Workspace ID
+
+Examples:
+  /project-a + Node + pages → /project-a/.epicenter/providers/persistence/pages.yjs
+  /project-b + Node + pages → /project-b/.epicenter/providers/persistence/pages.yjs
+  Browser + pages → IndexedDB:pages
+```
+
+### .epicenter folder structure
+
+The `.epicenter` folder contains all internal data, organized by extension:
+
+```
+.epicenter/
+└── providers/
+    ├── persistence/          # YJS persistence extension
+    │   ├── blog.yjs
+    │   └── auth.yjs
+    ├── sqlite/               # SQLite extension
+    │   ├── blog.db
+    │   ├── auth.db
+    │   └── logs/
+    │       ├── blog.log
+    │       └── auth.log
+    ├── markdown/             # Markdown extension
+    │   ├── logs/
+    │   │   └── blog.log
+    │   └── diagnostics/
+    │       └── blog.json
+    └── gmailAuth/            # Custom auth extension
+        └── token.json
+```
+
+<Warning>
+Only one client can access the same storage context at a time. Running a script while a server is active in the same directory will conflict.
+</Warning>
+
+## Extension system
+
+Extensions add capabilities to your workspace. They can:
+
+- **Persist data** - Save Y.Doc to disk or IndexedDB
+- **Sync across devices** - WebSocket sync via y-websocket protocol
+- **Query data** - SQLite for SQL queries, custom indexes for specialized queries
+- **Export data** - Markdown files, CSV, JSON, etc.
+
+Extensions are attached during client creation:
+
+```typescript
+const client = createWorkspace({ id: 'blog', tables: { posts } })
+  .withExtension('persistence', setupPersistence)
+  .withExtension('sqlite', (c) => sqliteProvider(c))
+  .withExtension('sync', createSyncExtension({ 
+    url: 'ws://localhost:3913/rooms/{id}' 
+  }));
+```
+
+Each extension receives a context with:
+- `id` - Workspace identifier
+- `ydoc` - The Y.Doc instance
+- `tables` - Table helpers for data access
+- `extensions` - Previously added extensions (typed)
+
+<Check>
+Extensions are composable—each can build on previously added extensions with full type safety.
+</Check>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Workspaces" icon="box" href="/concepts/workspaces">
+    Learn about workspace definitions and schemas
+  </Card>
+  <Card title="Tables" icon="table" href="/concepts/tables">
+    Understand YJS-backed tables and CRUD operations
+  </Card>
+  <Card title="Extensions" icon="puzzle-piece" href="/concepts/extensions">
+    Explore the extension system in depth
+  </Card>
+  <Card title="Actions" icon="bolt" href="/concepts/actions">
+    Define queries and mutations for your workspace
+  </Card>
+</CardGroup>

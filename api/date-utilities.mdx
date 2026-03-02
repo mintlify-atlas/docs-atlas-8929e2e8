@@ -1,0 +1,110 @@
+---
+title: Date Utilities
+description: DateTimeString intermediate representation for efficient date handling
+---
+
+<Note>
+**Planned Feature** - The `DateTimeString` utilities described in this page are currently in the design phase. See the [design document](https://github.com/EpicenterHQ/epicenter/pull/1216) for the full implementation plan.
+</Note>
+
+## Overview
+
+Epicenter uses `DateTimeString` as an intermediate representation for dates instead of eagerly parsing them into rich objects at every boundary. This pattern keeps dates as branded strings throughout the system and only parses to `Temporal.ZonedDateTime` when needed (typically for UI binding or date math).
+
+## Motivation
+
+The old `DateWithTimezone` type created unnecessary parse/serialize cycles:
+
+```
+SQLite (string) → parse → DateWithTimezone → serialize → API response (string) → parse → frontend → serialize → ...
+```
+
+Every boundary triggered conversions, even though rich datetime objects were only meaningful for brief moments (date pickers, date math). The conversion cost was paid everywhere.
+
+## DateTimeString Type
+
+The `DateTimeString` type is a branded string that combines an ISO date string with a timezone identifier:
+
+```typescript
+type DateTimeString = `${DateIsoString}|${TimezoneId}` & Brand<'DateTimeString'>;
+```
+
+**Storage format**: `"2024-01-01T20:00:00.000Z|America/New_York"`
+
+## API Design
+
+The `DateTimeString` object provides a JSON-style API for working with dates:
+
+```typescript
+const DateTimeString = {
+  // Parse a DateTimeString to Temporal.ZonedDateTime (lazy - call when needed)
+  parse(str: DateTimeString): Temporal.ZonedDateTime,
+  
+  // Stringify a Temporal.ZonedDateTime to DateTimeString
+  stringify(dt: Temporal.ZonedDateTime): DateTimeString,
+  
+  // Type guard to check if a value is a DateTimeString
+  is(value: unknown): value is DateTimeString,
+  
+  // Get the current time as a DateTimeString
+  now(timezone?: string): DateTimeString,
+};
+```
+
+## Usage Examples
+
+### Creating DateTimeStrings
+
+```typescript
+// Current time in a specific timezone
+const stored = DateTimeString.now('America/New_York');
+// "2024-01-01T20:00:00.000Z|America/New_York"
+```
+
+### Parsing for Date Math
+
+```typescript
+// Parse only when you need Temporal's rich API
+const live = DateTimeString.parse(stored);
+live.add({ months: 1 });  // Full Temporal API available
+
+// Convert back to storage format
+const updated = DateTimeString.stringify(live);
+```
+
+### Type Checking
+
+```typescript
+if (DateTimeString.is(value)) {
+  // TypeScript knows value is DateTimeString
+  const zonedDateTime = DateTimeString.parse(value);
+}
+```
+
+## Benefits
+
+1. **Zero conversion overhead** - Strings pass through APIs, serialization, and storage untouched
+2. **Temporal on demand** - `DateTimeString.parse()` gives you full date math capabilities when needed
+3. **Drizzle efficiency** - Avoids thousands of synchronous `fromDriver` calls on bulk queries
+4. **JSON-native** - Works seamlessly with `JSON.stringify()`, tRPC, and REST APIs
+
+## Migration from DateWithTimezone
+
+```typescript
+// Old approach
+const dt = DateWithTimezone({ date: new Date(), timezone: 'America/New_York' });
+dt.date; // JS Date (mutable, limited API)
+dt.toJSON(); // DateWithTimezoneString
+
+// New approach
+const stored = DateTimeString.now('America/New_York');
+const live = DateTimeString.parse(stored);  // Temporal.ZonedDateTime
+live.add({ months: 1 });  // Full Temporal API
+DateTimeString.stringify(live);  // Back to storage format
+```
+
+## Implementation Status
+
+<Warning>
+This feature is currently planned but not yet implemented. The design is documented in [PR #1216](https://github.com/EpicenterHQ/epicenter/pull/1216). Track implementation progress in the main repository.
+</Warning>

@@ -1,0 +1,185 @@
+---
+title: defineWorkspace
+description: Define a workspace schema for type inference and composability
+icon: "brackets-curly"
+---
+
+## Overview
+
+`defineWorkspace()` is a pure definition function that creates a reusable workspace schema. It's a passthrough for type inference and composability - the returned definition can be shared across multiple `createWorkspace()` calls or between modules.
+
+## Function Signature
+
+```typescript
+function defineWorkspace<
+  TId extends string,
+  TTableDefinitions extends TableDefinitions = Record<string, never>,
+  TKvDefinitions extends KvDefinitions = Record<string, never>,
+  TAwarenessDefinitions extends AwarenessDefinitions = Record<string, never>,
+>(config: {
+  id: TId;
+  tables?: TTableDefinitions;
+  kv?: TKvDefinitions;
+  awareness?: TAwarenessDefinitions;
+}): WorkspaceDefinition<
+  TId,
+  TTableDefinitions,
+  TKvDefinitions,
+  TAwarenessDefinitions
+>
+```
+
+## Parameters
+
+<ParamField path="config.id" type="string" required>
+  Unique workspace identifier. Used for storage keys and namespacing.
+</ParamField>
+
+<ParamField path="config.tables" type="Record<string, TableDefinition>">
+  Map of table names to table definitions created with `defineTable()`.
+  
+  Each table must have:
+  - An `id` field (string)
+  - A `_v` field (number) for versioning
+  - A schema defined with arktype's `type()` function
+</ParamField>
+
+<ParamField path="config.kv" type="Record<string, KvDefinition>">
+  Map of key-value store names to KV definitions created with `defineKv()`.
+  
+  KV stores are flexible - `_v` is optional (unlike tables where it's required).
+</ParamField>
+
+<ParamField path="config.awareness" type="Record<string, StandardSchemaV1>">
+  Record of awareness field schemas. Each field has its own StandardSchemaV1 schema.
+  
+  Used for real-time presence data like cursor positions, user status, etc.
+</ParamField>
+
+## Return Value
+
+<ResponseField name="WorkspaceDefinition" type="object">
+  A pure workspace definition object with full generic inference.
+  
+  <Expandable title="properties">
+    <ResponseField name="id" type="string">
+      The workspace identifier
+    </ResponseField>
+    
+    <ResponseField name="tables" type="TTableDefinitions">
+      The table definitions map
+    </ResponseField>
+    
+    <ResponseField name="kv" type="TKvDefinitions">
+      The KV definitions map
+    </ResponseField>
+    
+    <ResponseField name="awareness" type="TAwarenessDefinitions">
+      The awareness definitions
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## Usage
+
+### Basic Workspace
+
+```typescript
+import { defineWorkspace, defineTable } from '@epicenter/workspace';
+import { type } from 'arktype';
+
+const posts = defineTable(
+  type({ id: 'string', title: 'string', _v: '1' })
+);
+
+// Reusable definition with inferred types
+const workspace = defineWorkspace({ 
+  id: 'my-app', 
+  tables: { posts } 
+});
+
+const client = createWorkspace(workspace);
+```
+
+### Workspace with Tables and KV
+
+```typescript
+import { defineWorkspace, defineTable, defineKv } from '@epicenter/workspace';
+import { type } from 'arktype';
+
+const users = defineTable(
+  type({ id: 'string', email: 'string', name: 'string', _v: '1' })
+);
+
+const posts = defineTable(
+  type({ id: 'string', title: 'string', content: 'string', _v: '1' })
+);
+
+const settings = defineKv(
+  type({ theme: "'light' | 'dark'", fontSize: 'number' })
+);
+
+const workspace = defineWorkspace({
+  id: 'blog-app',
+  tables: { users, posts },
+  kv: { settings }
+});
+```
+
+### Workspace with Awareness
+
+```typescript
+import { defineWorkspace, defineTable } from '@epicenter/workspace';
+import { type } from 'arktype';
+
+const notes = defineTable(
+  type({ id: 'string', title: 'string', content: 'string', _v: '1' })
+);
+
+const workspace = defineWorkspace({
+  id: 'collaborative-notes',
+  tables: { notes },
+  awareness: {
+    cursor: type({ x: 'number', y: 'number' }),
+    selection: type({ start: 'number', end: 'number' }),
+    user: type({ name: 'string', color: 'string' })
+  }
+});
+```
+
+## Composability
+
+The key benefit of `defineWorkspace()` is composability - you can define your workspace once and reuse it:
+
+```typescript
+// shared/workspace.ts
+export const workspaceDefinition = defineWorkspace({
+  id: 'my-app',
+  tables: { posts, users, comments }
+});
+
+// client/app.ts
+import { workspaceDefinition } from '../shared/workspace';
+const client = createWorkspace(workspaceDefinition);
+
+// server/sync.ts
+import { workspaceDefinition } from '../shared/workspace';
+const server = createWorkspace(workspaceDefinition);
+```
+
+## Alternative: Inline Definition
+
+You can also pass the config directly to `createWorkspace()` without using `defineWorkspace()`:
+
+```typescript
+// Same result, less composable
+const client = createWorkspace({ 
+  id: 'my-app', 
+  tables: { posts } 
+});
+```
+
+## See Also
+
+- [Schema Types](/api/column-types) - Define table and KV schemas
+- [createWorkspace](/api/create-client) - Instantiate a workspace client

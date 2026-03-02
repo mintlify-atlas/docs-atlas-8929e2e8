@@ -1,0 +1,413 @@
+---
+title: SQLite Queries with Drizzle ORM
+description: Using the SQLite extension for complex queries, aggregations, and joins
+---
+
+The SQLite extension provides a powerful query layer over your YJS data using Drizzle ORM. This enables complex SQL queries, aggregations, and full-text search while maintaining YJS as the source of truth.
+
+## How It Works
+
+The SQLite extension:
+
+1. **Auto-syncs** from YJS to SQLite on every change
+2. **Stores** data in `.epicenter/providers/sqlite/{workspaceId}.db`
+3. **Provides** Drizzle table references for type-safe queries
+4. **Prevents** infinite loops with sync coordination flags
+5. **Logs** validation errors without blocking sync
+
+<Note>
+  YJS remains the source of truth. SQLite is a materialized view for querying.
+</Note>
+
+## Setup
+
+Add the SQLite extension when creating your workspace client:
+
+```typescript
+import { createWorkspace } from '@epicenter/workspace';
+import { sqliteExtension } from '@epicenter/workspace/extensions';
+import { blogWorkspace } from './workspace';
+
+const client = createWorkspace(blogWorkspace)
+  .withExtension('sqlite', sqliteExtension);
+
+// SQLite is now available at client.extensions.sqlite
+```
+
+## Extension Exports
+
+The SQLite extension provides:
+
+```typescript
+client.extensions.sqlite = {
+  // Drizzle database instance
+  db: BetterSQLite3Database,
+  
+  // Table references (one per workspace table)
+  posts: DrizzleTable,
+  users: DrizzleTable,
+  comments: DrizzleTable,
+  
+  // Manual sync operations (rarely needed)
+  pullToSqlite: () => void,   // YJS → SQLite
+  pushFromSqlite: () => void, // SQLite → YJS
+}
+```
+
+## Basic Queries
+
+### Select All
+
+```typescript
+// Get all posts from SQLite
+const posts = client.extensions.sqlite.db
+  .select()
+  .from(client.extensions.sqlite.posts)
+  .all();
+
+console.log(posts);
+```
+
+### Filtered Select
+
+```typescript
+import { eq } from 'drizzle-orm';
+
+const { sqlite } = client.extensions;
+
+// Get published posts
+const published = sqlite.db
+  .select()
+  .from(sqlite.posts)
+  .where(eq(sqlite.posts.published, true))
+  .all();
+```
+
+### Ordered Results
+
+```typescript
+import { desc } from 'drizzle-orm';
+
+const { sqlite } = client.extensions;
+
+// Get posts ordered by date
+const recent = sqlite.db
+  .select()
+  .from(sqlite.posts)
+  .orderBy(desc(sqlite.posts.publishedAt))
+  .limit(10)
+  .all();
+```
+
+## Advanced Queries
+
+### Aggregations
+
+```typescript
+import { count, avg, sum } from 'drizzle-orm';
+
+const { sqlite } = client.extensions;
+
+// Count posts by category
+const stats = sqlite.db
+  .select({
+    category: sqlite.posts.category,
+    total: count(),
+    avgViews: avg(sqlite.posts.views),
+    totalGildings: sum(sqlite.posts.gildings),
+  })
+  .from(sqlite.posts)
+  .groupBy(sqlite.posts.category)
+  .all();
+
+console.log(stats);
+// [
+//   { category: 'tech', total: 42, avgViews: 1234.5, totalGildings: 15 },
+//   { category: 'personal', total: 18, avgViews: 567.8, totalGildings: 3 }
+// ]
+```
+
+### Complex Filters
+
+```typescript
+import { and, or, gt, like, inArray } from 'drizzle-orm';
+
+const { sqlite } = client.extensions;
+
+// Posts with complex conditions
+const results = sqlite.db
+  .select()
+  .from(sqlite.posts)
+  .where(
+    and(
+      eq(sqlite.posts.published, true),
+      gt(sqlite.posts.views, 1000),
+      or(
+        like(sqlite.posts.title, '%Epicenter%'),
+        inArray(sqlite.posts.category, ['tech', 'tutorial'])
+      )
+    )
+  )
+  .all();
+```
+
+### Joins (When Available)
+
+```typescript
+const { sqlite } = client.extensions;
+
+// Join posts with users (if you have both tables)
+const postsWithAuthors = sqlite.db
+  .select({
+    postId: sqlite.posts.id,
+    title: sqlite.posts.title,
+    authorName: sqlite.users.username,
+    authorEmail: sqlite.users.email,
+  })
+  .from(sqlite.posts)
+  .leftJoin(
+    sqlite.users,
+    eq(sqlite.posts.authorId, sqlite.users.id)
+  )
+  .all();
+```
+
+## Production Patterns
+
+### Action with SQLite Query
+
+```typescript
+import { defineQuery } from '@epicenter/workspace';
+import { type } from 'arktype';
+import { eq, desc } from 'drizzle-orm';
+
+export const getPublishedPosts = defineQuery({
+  input: type({ limit: 'number' }),
+  handler: ({ limit }) => {
+    const { sqlite } = client.extensions;
+    
+    return sqlite.db
+      .select()
+      .from(sqlite.posts)
+      .where(eq(sqlite.posts.published, true))
+      .orderBy(desc(sqlite.posts.publishedAt))
+      .limit(limit)
+      .all();
+  },
+});
+```
+
+### Search Action
+
+```typescript
+import { defineQuery } from '@epicenter/workspace';
+import { type } from 'arktype';
+import { like, or } from 'drizzle-orm';
+
+export const searchPosts = defineQuery({
+  input: type({ query: 'string' }),
+  handler: ({ query }) => {
+    const { sqlite } = client.extensions;
+    const pattern = `%${query}%`;
+    
+    return sqlite.db
+      .select()
+      .from(sqlite.posts)
+      .where(
+        or(
+          like(sqlite.posts.title, pattern),
+          like(sqlite.posts.content, pattern)
+        )
+      )
+      .all();
+  },
+});
+```
+
+### Analytics Query
+
+```typescript
+import { defineQuery } from '@epicenter/workspace';
+import { count, avg, sum } from 'drizzle-orm';
+
+export const getPostStats = defineQuery({
+  handler: () => {
+    const { sqlite } = client.extensions;
+    
+    const stats = sqlite.db
+      .select({
+        category: sqlite.posts.category,
+        total: count(),
+        avgViews: avg(sqlite.posts.views),
+        totalGildings: sum(sqlite.posts.gildings),
+        published: count(sql`CASE WHEN ${sqlite.posts.published} THEN 1 END`),
+      })
+      .from(sqlite.posts)
+      .groupBy(sqlite.posts.category)
+      .all();
+    
+    return stats;
+  },
+});
+```
+
+## Manual Sync Operations
+
+<Warning>
+  Manual sync is rarely needed. The extension auto-syncs on every YJS change.
+</Warning>
+
+### Pull from YJS to SQLite
+
+```typescript
+// Force sync YJS → SQLite (replaces all SQLite data)
+client.extensions.sqlite.pullToSqlite();
+```
+
+### Push from SQLite to YJS
+
+```typescript
+// Force sync SQLite → YJS (replaces all YJS data)
+client.extensions.sqlite.pushFromSqlite();
+```
+
+## Real-World Example: Reddit Workspace
+
+Here's a complete example from the Reddit GDPR ingestion system:
+
+```typescript
+import { createWorkspace } from '@epicenter/workspace';
+import { sqliteExtension } from '@epicenter/workspace/extensions';
+import { defineQuery } from '@epicenter/workspace';
+import { type } from 'arktype';
+import { eq, desc, and, gte } from 'drizzle-orm';
+import { redditWorkspace } from './workspace';
+
+const client = createWorkspace(redditWorkspace)
+  .withExtension('sqlite', sqliteExtension);
+
+// Action: Get top posts by subreddit
+export const getTopPostsBySubreddit = defineQuery({
+  input: type({ subreddit: 'string', limit: 'number' }),
+  handler: ({ subreddit, limit }) => {
+    const { sqlite } = client.extensions;
+    
+    return sqlite.db
+      .select()
+      .from(sqlite.posts)
+      .where(eq(sqlite.posts.subreddit, subreddit))
+      .orderBy(desc(sqlite.posts.gildings))
+      .limit(limit)
+      .all();
+  },
+});
+
+// Action: Get gilded content from the last year
+export const getRecentGildedPosts = defineQuery({
+  input: type({ minGildings: 'number' }),
+  handler: ({ minGildings }) => {
+    const { sqlite } = client.extensions;
+    const oneYearAgo = new Date();
+    oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
+    
+    return sqlite.db
+      .select()
+      .from(sqlite.posts)
+      .where(
+        and(
+          gte(sqlite.posts.gildings, minGildings),
+          gte(sqlite.posts.date, oneYearAgo.toISOString())
+        )
+      )
+      .orderBy(desc(sqlite.posts.date))
+      .all();
+  },
+});
+
+// Action: Subreddit statistics
+export const getSubredditStats = defineQuery({
+  handler: () => {
+    const { sqlite } = client.extensions;
+    
+    return sqlite.db
+      .select({
+        subreddit: sqlite.posts.subreddit,
+        postCount: count(),
+        totalGildings: sum(sqlite.posts.gildings),
+      })
+      .from(sqlite.posts)
+      .groupBy(sqlite.posts.subreddit)
+      .orderBy(desc(count()))
+      .all();
+  },
+});
+```
+
+## Storage Location
+
+SQLite databases are stored at:
+
+```
+.epicenter/
+└── providers/
+    └── sqlite/
+        ├── blog.db          # SQLite database
+        └── logs/
+            └── blog.log     # Sync logs
+```
+
+<Tip>
+  Add `.epicenter/providers/` to your `.gitignore`. These files are generated from your YJS data.
+</Tip>
+
+## Drizzle Operators Reference
+
+Common operators re-exported from Drizzle:
+
+```typescript
+import {
+  // Comparison
+  eq,    // Equal
+  ne,    // Not equal
+  gt,    // Greater than
+  gte,   // Greater than or equal
+  lt,    // Less than
+  lte,   // Less than or equal
+  
+  // Logic
+  and,   // AND condition
+  or,    // OR condition
+  not,   // NOT condition
+  
+  // Pattern matching
+  like,      // LIKE pattern
+  inArray,   // IN array
+  isNull,    // IS NULL
+  isNotNull, // IS NOT NULL
+  
+  // Aggregation
+  count,
+  sum,
+  avg,
+  min,
+  max,
+  
+  // Ordering
+  asc,
+  desc,
+  
+  // Raw SQL
+  sql,
+} from 'drizzle-orm';
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Markdown Persistence" icon="file-lines" href="/guides/markdown-persistence">
+    Persist data as human-readable markdown files
+  </Card>
+  <Card title="Multi-Device Sync" icon="arrows-rotate" href="/guides/multi-device-sync">
+    Sync data across devices with WebSockets
+  </Card>
+</CardGroup>

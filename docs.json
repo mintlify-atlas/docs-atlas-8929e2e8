@@ -1,122 +1,129 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "theme": "mint",
-  "name": "Mint Starter Kit",
+  "name": "Epicenter",
+  "theme": "palm",
   "colors": {
-    "primary": "#16A34A",
-    "light": "#07C983",
-    "dark": "#15803D"
+    "primary": "#FF6B35",
+    "light": "#FFA07A",
+    "dark": "#E64A19"
   },
-  "favicon": "/favicon.svg",
+  "navbar": {
+    "primary": {
+      "type": "github",
+      "href": "https://github.com/EpicenterHQ/epicenter"
+    }
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/EpicenterHQ/epicenter"
+    }
+  },
   "navigation": {
     "tabs": [
       {
-        "tab": "Guides",
+        "tab": "Documentation",
         "groups": [
           {
-            "group": "Getting started",
+            "group": "Get Started",
             "pages": [
-              "index",
+              "introduction",
               "quickstart",
-              "development"
+              "installation"
             ]
           },
           {
-            "group": "Customization",
+            "group": "Core Concepts",
             "pages": [
-              "essentials/settings",
-              "essentials/navigation"
+              "concepts/architecture",
+              "concepts/workspaces",
+              "concepts/tables",
+              "concepts/extensions",
+              "concepts/actions"
             ]
           },
           {
-            "group": "Writing content",
+            "group": "Guides",
             "pages": [
-              "essentials/markdown",
-              "essentials/code",
-              "essentials/images",
-              "essentials/reusable-snippets"
+              "guides/defining-workspaces",
+              "guides/table-operations",
+              "guides/sqlite-queries",
+              "guides/markdown-persistence",
+              "guides/multi-device-sync",
+              "guides/error-handling"
             ]
           },
           {
-            "group": "AI tools",
+            "group": "Extensions",
             "pages": [
-              "ai-tools/cursor",
-              "ai-tools/claude-code",
-              "ai-tools/windsurf"
+              "extensions/overview",
+              "extensions/sqlite",
+              "extensions/markdown",
+              "extensions/sync",
+              "extensions/custom"
             ]
           }
         ]
       },
       {
-        "tab": "API reference",
+        "tab": "API Reference",
         "groups": [
           {
-            "group": "API documentation",
+            "group": "Client",
             "pages": [
-              "api-reference/introduction"
+              "api/create-client",
+              "api/client-methods"
             ]
           },
           {
-            "group": "Endpoint examples",
+            "group": "Workspace",
             "pages": [
-              "api-reference/endpoint/get",
-              "api-reference/endpoint/create",
-              "api-reference/endpoint/delete",
-              "api-reference/endpoint/webhook"
+              "api/define-workspace",
+              "api/column-types",
+              "api/table-operations"
+            ]
+          },
+          {
+            "group": "Actions",
+            "pages": [
+              "api/define-query",
+              "api/define-mutation",
+              "api/action-types"
+            ]
+          },
+          {
+            "group": "Extensions",
+            "pages": [
+              "api/sqlite-provider",
+              "api/markdown-provider",
+              "api/sync-extension",
+              "api/persistence"
+            ]
+          },
+          {
+            "group": "Utilities",
+            "pages": [
+              "api/date-utilities",
+              "api/validation",
+              "api/errors"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Apps",
+        "groups": [
+          {
+            "group": "Whispering",
+            "pages": [
+              "apps/whispering/overview",
+              "apps/whispering/installation",
+              "apps/whispering/setup",
+              "apps/whispering/features",
+              "apps/whispering/contributing"
             ]
           }
         ]
       }
-    ],
-    "global": {
-      "anchors": [
-        {
-          "anchor": "Documentation",
-          "href": "https://mintlify.com/docs",
-          "icon": "book-open-cover"
-        },
-        {
-          "anchor": "Blog",
-          "href": "https://mintlify.com/blog",
-          "icon": "newspaper"
-        }
-      ]
-    }
-  },
-  "logo": {
-    "light": "/logo/light.svg",
-    "dark": "/logo/dark.svg"
-  },
-  "navbar": {
-    "links": [
-      {
-        "label": "Support",
-        "href": "mailto:hi@mintlify.com"
-      }
-    ],
-    "primary": {
-      "type": "button",
-      "label": "Dashboard",
-      "href": "https://dashboard.mintlify.com"
-    }
-  },
-  "contextual": {
-    "options": [
-     "copy",
-     "view",
-     "chatgpt",
-     "claude",
-     "perplexity",
-     "mcp",
-     "cursor",
-     "vscode"
-   ]
-  },
-  "footer": {
-    "socials": {
-      "x": "https://x.com/mintlify",
-      "github": "https://github.com/mintlify",
-      "linkedin": "https://linkedin.com/company/mintlify"
-    }
+    ]
   }
 }

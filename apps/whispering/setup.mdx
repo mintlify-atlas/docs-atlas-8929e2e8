@@ -1,0 +1,231 @@
+---
+title: Setup
+description: Configure transcription providers, API keys, and choose between local and cloud options
+---
+
+After installing Whispering, you need to choose a transcription method. Pick the one that fits your needs:
+
+<CardGroup cols={2}>
+  <Card title="Local Transcription" icon="house">
+    Complete privacy, offline use, no ongoing costs
+  </Card>
+  <Card title="Cloud Transcription" icon="cloud">
+    Fast setup, near-instant results, high accuracy
+  </Card>
+</CardGroup>
+
+## Local Transcription (Whisper C++)
+
+**Best for:** Complete privacy, offline use, no ongoing costs
+
+Your audio never leaves your device. Works without internet. Free forever.
+
+<Note>
+Whisper C++ is not available on Windows due to upstream whisper-rs limitations and MSVC runtime library conflicts. Windows users should use cloud transcription or the Parakeet/Moonshine models (when available).
+</Note>
+
+<Steps>
+  <Step title="Open transcription settings">
+    1. Open Whispering
+    2. Click **Settings** (⚙️) → **Transcription**
+  </Step>
+
+  <Step title="Select Whisper C++">
+    Choose **Whisper C++** from the transcription provider dropdown.
+  </Step>
+
+  <Step title="Download a model">
+    You must download a model before you can transcribe.
+
+    1. Choose a model (start with `Small` for good balance of speed and accuracy)
+    2. Click the **Download** button next to the model
+    3. Wait for download to complete (may take a few minutes)
+    4. Verify the model shows as **activated**
+
+    <Warning>
+    You must download a model before you can transcribe. Whispering cannot transcribe without a local model file.
+    </Warning>
+  </Step>
+
+  <Step title="Test your setup">
+    1. Click the record button or use your keyboard shortcut
+    2. Say "Testing local transcription"
+    3. Press the stop record button and wait for processing to complete
+
+    **Success!** Your words are now in your clipboard. Paste anywhere!
+  </Step>
+</Steps>
+
+<Info>
+Local transcription is slower than cloud options but provides complete privacy. Processing speed depends on your hardware and the model size you chose.
+</Info>
+
+### Other Local Providers
+
+Whispering also supports:
+
+- **Parakeet**: NVIDIA's high-performance local transcription
+- **Moonshine**: Optimized for edge devices
+- **Speaches**: Self-hosted transcription server
+
+## Cloud Transcription (Groq)
+
+**Best for:** Fast setup, near-instant results, high accuracy
+
+Groq is the recommended cloud provider because it's incredibly fast, accurate, has a generous free tier, and unbeatable pricing (as cheap as $0.04/hour using `whisper-large-v3-turbo`).
+
+<Steps>
+  <Step title="Get your free API key">
+    1. Visit [console.groq.com/keys](https://console.groq.com/keys)
+    2. Sign up (free, no credit card required)
+    3. Create API key
+    4. Copy the API key
+  </Step>
+
+  <Step title="Configure Whispering">
+    1. Open Whispering
+    2. Click **Settings** (⚙️) → **Transcription**
+    3. Select **Groq** from the dropdown
+    4. Paste your API key in the API key field
+    5. Choose a model (`whisper-large-v3-turbo` is fastest and cheapest)
+  </Step>
+
+  <Step title="Test your setup">
+    1. Click the record button or use your keyboard shortcut
+    2. Say "Testing cloud transcription"
+    3. Results appear almost instantly
+
+    **Success!** Your words are now in your clipboard. Paste anywhere!
+  </Step>
+</Steps>
+
+<Info>
+Cloud transcription requires an internet connection and sends your audio to Groq's servers. Your API key ensures the data goes directly from you to Groq with no middleman.
+</Info>
+
+### Groq Models
+
+| Model | Cost per Hour | Speed | Accuracy |
+|-------|---------------|-------|----------|
+| `whisper-large-v3-turbo` | $0.04 | Fastest | High |
+| `whisper-large-v3` | $0.111 | Fast | Highest |
+
+## Other Cloud Providers
+
+Whispering supports multiple transcription providers:
+
+<Tabs>
+  <Tab title="OpenAI">
+    **Why use it:** Industry standard, highly accurate
+
+    **Get API Key:** [platform.openai.com/api-keys](https://platform.openai.com/api-keys)
+
+    **Enable billing:** [platform.openai.com/settings/organization/billing/overview](https://platform.openai.com/settings/organization/billing/overview)
+
+    **Models:**
+    - `whisper-1` - $0.36/hour
+    - `gpt-4o-transcribe` - $0.36/hour
+    - `gpt-4o-mini-transcribe` - $0.18/hour
+  </Tab>
+
+  <Tab title="ElevenLabs">
+    **Why use it:** High-quality voice AI, excellent for voice-to-text
+
+    **Get API Key:** [elevenlabs.io/app/settings/api-keys](https://elevenlabs.io/app/settings/api-keys)
+
+    **Models:**
+    - `scribe_v2`
+    - `scribe_v1`
+    - `scribe_v1_experimental`
+  </Tab>
+
+  <Tab title="Deepgram">
+    **Why use it:** Fast, accurate, great pricing
+
+    **Get API Key:** [console.deepgram.com](https://console.deepgram.com)
+
+    Deepgram offers a variety of Nova models optimized for different use cases.
+  </Tab>
+
+  <Tab title="Mistral">
+    **Why use it:** European AI provider, privacy-focused
+
+    **Get API Key:** [console.mistral.ai](https://console.mistral.ai)
+
+    Mistral provides competitive transcription models with strong privacy guarantees.
+  </Tab>
+</Tabs>
+
+## Transcription Settings
+
+All transcription providers support these common settings:
+
+### Output Language
+
+Specify the language you want the transcription in. Useful for translation:
+
+- Leave blank for automatic detection
+- Set to a specific language code (e.g., `en`, `es`, `fr`) for translation
+
+### Prompt
+
+Provide context to improve transcription accuracy:
+
+```
+This is a technical discussion about software engineering and TypeScript.
+```
+
+The prompt helps the model:
+- Recognize domain-specific terms
+- Understand context
+- Improve accuracy for jargon or proper nouns
+
+### Temperature
+
+Controls randomness in transcription:
+
+- `0.0` - Most deterministic, consistent results
+- `0.5` - Balanced (default)
+- `1.0` - More creative, may vary between runs
+
+<Tip>
+Most users should leave temperature at the default value.
+</Tip>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="No transcription?">
+    - Double-check API key in Settings → Transcription
+    - Verify you have an internet connection (for cloud providers)
+    - Check that you selected the correct provider
+    - For local: Ensure model is downloaded and activated
+  </Accordion>
+
+  <Accordion title="Shortcut not working?">
+    - **macOS**: Bring Whispering to foreground (see installation page)
+    - **All platforms**: Try using Voice Activated mode instead
+    - Check Settings → Shortcuts to verify the shortcut is set
+  </Accordion>
+
+  <Accordion title="Wrong provider selected?">
+    Go to Settings → Transcription and verify the correct provider is selected from the dropdown.
+  </Accordion>
+
+  <Accordion title="Slow transcription with local models?">
+    - Local transcription speed depends on your hardware
+    - Try a smaller model (e.g., `Tiny` or `Small`)
+    - Consider using cloud providers for faster results
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Features" icon="stars" href="/apps/whispering/features">
+    Learn about Voice Activity Detection, transformations, and custom shortcuts
+  </Card>
+  <Card title="AI Transformations" icon="wand-magic-sparkles" href="/apps/whispering/features#ai-transformations">
+    Transform transcriptions with custom AI workflows
+  </Card>
+</CardGroup>

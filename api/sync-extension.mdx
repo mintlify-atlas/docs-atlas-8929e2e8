@@ -1,0 +1,320 @@
+---
+title: 'createSyncExtension()'
+description: 'WebSocket-based real-time sync for Epicenter workspaces'
+icon: 'arrows-rotate'
+---
+
+## Overview
+
+The `createSyncExtension()` function creates a sync extension that connects a workspace to a WebSocket server for real-time synchronization across devices.
+
+```typescript
+import { createSyncExtension } from '@epicenter/workspace/extensions/sync';
+```
+
+## Function Signature
+
+<ParamField path="config" type="SyncExtensionConfig" required>
+  Sync extension configuration with WebSocket URL and optional authentication
+  
+  <Expandable title="Properties">
+    <ParamField path="url" type="string | ((workspaceId: string) => string)" required>
+      WebSocket URL with `{id}` placeholder or a function that returns the URL
+      
+      Examples:
+      - `'ws://localhost:3913/rooms/{id}'`
+      - `'wss://sync.example.com/rooms/{id}'`
+      - `(id) => \`ws://localhost:3913/${id}\``
+    </ParamField>
+    
+    <ParamField path="token" type="string">
+      Static authentication token (Mode 2: Shared Secret)
+      
+      Mutually exclusive with `getToken`
+    </ParamField>
+    
+    <ParamField path="getToken" type="(workspaceId: string) => Promise<string>">
+      Dynamic token fetcher for external JWT auth (Mode 3: External JWT)
+      
+      Called on each connect/reconnect. Receives workspace ID as argument.
+      
+      Mutually exclusive with `token`
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="ExtensionFactory" type="(context: ExtensionContext) => Extension">
+  Returns an extension factory function that creates the sync extension
+  
+  <Expandable title="Extension Properties">
+    <ResponseField name="provider" type="SyncProvider">
+      The underlying sync provider instance with connection state
+    </ResponseField>
+    
+    <ResponseField name="reconnect" type="(newConfig?: ReconnectConfig) => void">
+      Swap the sync target without affecting other extensions
+      
+      **ReconnectConfig**: `{ url?: string, token?: string, getToken?: () => Promise<string> }`
+    </ResponseField>
+    
+    <ResponseField name="whenReady" type="Promise<void>">
+      Promise that resolves when the WebSocket connection is initiated
+    </ResponseField>
+    
+    <ResponseField name="destroy" type="() => void">
+      Cleanup function to disconnect and destroy the provider
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## Authentication Modes
+
+### Mode 1: Open (No Auth)
+
+No authentication - suitable for localhost, Tailscale, or LAN:
+
+```typescript
+createWorkspace(definition)
+  .withExtension('sync', createSyncExtension({
+    url: 'ws://localhost:3913/rooms/{id}',
+  }))
+```
+
+### Mode 2: Shared Secret
+
+Static token for self-hosted deployments:
+
+```typescript
+createWorkspace(definition)
+  .withExtension('sync', createSyncExtension({
+    url: 'ws://my-server:3913/rooms/{id}',
+    token: 'my-shared-secret',
+  }))
+```
+
+### Mode 3: External JWT
+
+Dynamic token refresh for cloud deployments:
+
+```typescript
+createWorkspace(definition)
+  .withExtension('sync', createSyncExtension({
+    url: 'wss://sync.epicenter.so/rooms/{id}',
+    getToken: async (workspaceId) => {
+      const res = await fetch('/api/sync/token', {
+        method: 'POST',
+        body: JSON.stringify({ workspaceId }),
+      });
+      return (await res.json()).token;
+    },
+  }))
+```
+
+## Basic Usage
+
+### With Persistence (Recommended)
+
+Always add persistence before sync to ensure local state loads before connecting:
+
+```typescript
+import { createWorkspace } from '@epicenter/workspace';
+import { indexeddbPersistence } from '@epicenter/workspace/extensions/sync/web';
+import { createSyncExtension } from '@epicenter/workspace/extensions/sync';
+
+const workspace = createWorkspace(definition)
+  .withExtension('persistence', indexeddbPersistence)
+  .withExtension('sync', createSyncExtension({
+    url: 'ws://localhost:3913/rooms/{id}',
+  }));
+```
+
+### Desktop/Node.js Setup
+
+```typescript
+import { persistence } from '@epicenter/workspace/extensions/sync/desktop';
+import { createSyncExtension } from '@epicenter/workspace/extensions/sync';
+import { join } from 'node:path';
+
+const workspace = createWorkspace(definition)
+  .withExtension('persistence', (ctx) =>
+    persistence(ctx, {
+      filePath: join('.epicenter', 'persistence', `${ctx.id}.yjs`),
+    })
+  )
+  .withExtension('sync', createSyncExtension({
+    url: 'ws://localhost:3913/rooms/{id}',
+  }));
+```
+
+## Multi-Device Sync
+
+### Multiple Sync Targets
+
+Connect to multiple sync nodes simultaneously:
+
+```typescript
+const SYNC_NODES = {
+  desktop: 'ws://192.168.1.100:3913/rooms/{id}',
+  laptop: 'ws://192.168.1.101:3913/rooms/{id}',
+  cloud: 'wss://sync.example.com/rooms/{id}',
+};
+
+const workspace = createWorkspace(definition)
+  .withExtension('persistence', indexeddbPersistence)
+  .withExtension('syncDesktop', createSyncExtension({ url: SYNC_NODES.desktop }))
+  .withExtension('syncLaptop', createSyncExtension({ url: SYNC_NODES.laptop }))
+  .withExtension('syncCloud', createSyncExtension({ url: SYNC_NODES.cloud }));
+```
+
+### Dynamic Reconnection
+
+Swap sync targets at runtime:
+
+```typescript
+// Switch from local to cloud
+workspace.extensions.sync.reconnect({
+  url: 'wss://cloud.example.com/rooms/my-workspace',
+  getToken: async () => {
+    const res = await fetch('/api/token');
+    return (await res.json()).token;
+  },
+});
+```
+
+## Lifecycle & Readiness
+
+### Extension Ordering
+
+The sync extension waits for prior extensions via `context.whenReady`:
+
+```typescript
+// ✅ Correct: Persistence loads before sync connects
+createWorkspace(definition)
+  .withExtension('persistence', indexeddbPersistence)  // 1. Load local state
+  .withExtension('sync', createSyncExtension({ url })) // 2. Then connect
+
+// ❌ Wrong: Sync connects before local state loads
+createWorkspace(definition)
+  .withExtension('sync', createSyncExtension({ url })) // Connects immediately
+  .withExtension('persistence', indexeddbPersistence)  // Loads after
+```
+
+### whenReady Behavior
+
+The sync extension's `whenReady` resolves when:
+1. All prior extensions are ready
+2. WebSocket connection is initiated (not necessarily connected)
+
+```typescript
+const workspace = createWorkspace(definition)
+  .withExtension('persistence', indexeddbPersistence)
+  .withExtension('sync', createSyncExtension({ url }));
+
+await workspace.extensions.sync.whenReady;
+// Persistence loaded + WebSocket connecting
+// UI can render from local state immediately
+```
+
+## Connection State
+
+Access the underlying provider for connection status:
+
+```typescript
+const { provider } = workspace.extensions.sync;
+
+// Check connection state
+if (provider.ws?.readyState === WebSocket.OPEN) {
+  console.log('Connected');
+}
+
+// Listen for connection events
+provider.on('status', ({ status }) => {
+  console.log('Connection status:', status); // 'connecting' | 'connected' | 'disconnected'
+});
+```
+
+## Sync Protocol
+
+The sync extension uses the **y-websocket** protocol:
+
+1. **Initial Sync**: On connection, client sends its state vector
+2. **Server Response**: Server sends missing updates
+3. **Live Updates**: Changes propagate in real-time
+4. **Awareness**: Cursor positions and presence sync separately
+5. **Reconnection**: Automatic reconnect with exponential backoff
+
+### How Sync Works
+
+```typescript
+// 1. Client connects with local state
+workspace.extensions.sync.provider.connect();
+
+// 2. Server receives state vector
+// Server: "Client has updates 0-100, I have 0-150"
+
+// 3. Server sends missing updates (101-150)
+// Client applies updates and merges with local changes
+
+// 4. Client sends new local changes (151+)
+// Server broadcasts to other connected clients
+
+// 5. CRDT merge ensures consistency
+// All clients eventually converge to same state
+```
+
+## Advanced Examples
+
+### Conditional Sync
+
+```typescript
+const shouldSync = process.env.ENABLE_SYNC === 'true';
+
+const workspace = createWorkspace(definition)
+  .withExtension('persistence', indexeddbPersistence);
+
+if (shouldSync) {
+  workspace.withExtension('sync', createSyncExtension({ url }));
+}
+```
+
+### Custom URL Resolution
+
+```typescript
+createWorkspace(definition)
+  .withExtension('sync', createSyncExtension({
+    url: (workspaceId) => {
+      const env = process.env.NODE_ENV;
+      const base = env === 'production' 
+        ? 'wss://sync.example.com'
+        : 'ws://localhost:3913';
+      return `${base}/rooms/${workspaceId}`;
+    },
+  }))
+```
+
+### With Awareness
+
+Awareness (presence/cursors) syncs automatically:
+
+```typescript
+const workspace = createWorkspace(definition)
+  .withExtension('sync', createSyncExtension({ url }));
+
+// Set local awareness state
+workspace.awareness.setLocalState({
+  cursor: { x: 100, y: 200 },
+  user: { name: 'Alice', color: '#ff0000' },
+});
+
+// Listen to remote awareness changes
+workspace.awareness.on('change', () => {
+  const states = workspace.awareness.getStates();
+  console.log('Connected users:', states);
+});
+```
+
+## Related
+
+- [persistence()](/api/persistence) - Filesystem and IndexedDB persistence
+- [createWorkspace()](/api/create-client) - Create workspace client
+- [Table Operations](/api/table-operations) - CRUD operations

@@ -1,0 +1,479 @@
+---
+title: Sync Extension
+description: Real-time multi-device sync via WebSocket using the y-websocket protocol
+---
+
+## Overview
+
+The Sync extension enables real-time collaboration and multi-device synchronization using the y-websocket protocol. It connects your workspace to a sync server via WebSocket, automatically broadcasting changes to all connected clients.
+
+### Key Features
+
+- **Real-time sync** — Changes propagate instantly across devices
+- **y-websocket protocol** — Standard Yjs sync protocol
+- **Three auth modes** — Open, static token, or dynamic JWT
+- **Awareness support** — Built-in user presence and cursors
+- **Multi-provider** — Connect to multiple sync nodes simultaneously
+- **Resilient** — Automatic reconnection with exponential backoff
+- **Local-first** — Works offline, syncs when reconnected
+
+## Installation
+
+The Sync extension is built-in to `@epicenter/workspace`:
+
+```bash
+bun add @epicenter/workspace
+```
+
+The sync server is provided by `@epicenter/server` (optional):
+
+```bash
+bun add @epicenter/server
+```
+
+## Basic Setup
+
+### Client Configuration
+
+Add the sync extension after persistence:
+
+```typescript
+import { createWorkspace, defineWorkspace } from '@epicenter/workspace';
+import { indexeddbPersistence } from '@epicenter/workspace/extensions/sync/web';
+import { createSyncExtension } from '@epicenter/workspace/extensions/sync';
+
+const definition = defineWorkspace({
+  id: 'blog',
+  tables: { posts: { /* ... */ } },
+});
+
+const client = createWorkspace(definition)
+  .withExtension('persistence', indexeddbPersistence)
+  .withExtension('sync', createSyncExtension({
+    url: 'ws://localhost:3913/rooms/{id}',
+  }));
+```
+
+<Warning>
+  Always add persistence **before** sync. This ensures local state is loaded before connecting to the server.
+</Warning>
+
+### Server Setup
+
+The `@epicenter/server` package includes a sync endpoint at `/rooms/{workspaceId}`:
+
+```typescript
+import { createServer } from '@epicenter/server';
+
+const server = createServer(blogClient, { port: 3913 });
+server.start();
+
+// Clients connect to: ws://localhost:3913/rooms/blog
+```
+
+<Info>
+  The sync server is a WebSocket endpoint that relays Yjs updates between clients. It doesn't store data — persistence is handled by client-side extensions.
+</Info>
+
+## Authentication Modes
+
+The sync extension supports three authentication modes:
+
+### Mode 1: Open (No Auth)
+
+For localhost, Tailscale, or LAN connections:
+
+```typescript
+const client = createWorkspace(definition)
+  .withExtension('persistence', indexeddbPersistence)
+  .withExtension('sync', createSyncExtension({
+    url: 'ws://localhost:3913/rooms/{id}',
+  }));
+```
+
+### Mode 2: Static Token
+
+For self-hosted servers with a shared secret:
+
+```typescript
+const client = createWorkspace(definition)
+  .withExtension('persistence', indexeddbPersistence)
+  .withExtension('sync', createSyncExtension({
+    url: 'wss://my-server.com/rooms/{id}',
+    token: 'my-shared-secret',
+  }));
+```
+
+### Mode 3: Dynamic JWT
+
+For cloud deployments with token refresh:
+
+```typescript
+const client = createWorkspace(definition)
+  .withExtension('persistence', indexeddbPersistence)
+  .withExtension('sync', createSyncExtension({
+    url: 'wss://sync.epicenter.so/rooms/{id}',
+    getToken: async (workspaceId) => {
+      const res = await fetch('/api/sync/token', {
+        method: 'POST',
+        body: JSON.stringify({ workspaceId }),
+      });
+      return (await res.json()).token;
+    },
+  }));
+```
+
+## Configuration Options
+
+### `SyncExtensionConfig`
+
+```typescript
+type SyncExtensionConfig = {
+  url: string | ((workspaceId: string) => string);
+  token?: string;
+  getToken?: (workspaceId: string) => Promise<string>;
+};
+```
+
+### URL Placeholder
+
+The `{id}` placeholder is replaced with the workspace ID:
+
+```typescript
+// Static URL with placeholder
+url: 'ws://localhost:3913/rooms/{id}'
+// → 'ws://localhost:3913/rooms/blog'
+
+// Dynamic URL with function
+url: (workspaceId) => `ws://${getServerHost()}/rooms/${workspaceId}`
+```
+
+## Extension Exports
+
+The sync extension exports:
+
+```typescript
+{
+  provider: SyncProvider,  // Underlying sync provider
+  whenReady: Promise<void>, // Connection initiated
+  destroy: () => void,      // Disconnect and cleanup
+  reconnect: (config?) => void, // Swap sync target
+}
+```
+
+### Accessing the Provider
+
+The provider exposes connection state and utilities:
+
+```typescript
+const { provider } = client.extensions.sync;
+
+// Check connection status
+if (provider.connected) {
+  console.log('Connected to sync server');
+}
+
+// Check for unsaved changes
+if (provider.hasLocalChanges) {
+  console.warn('You have unsaved changes');
+}
+
+// Listen to connection events
+provider.on('status', ({ status }) => {
+  console.log('Status:', status); // 'connected' | 'disconnected'
+});
+```
+
+### Reconnecting
+
+Swap the sync server without affecting other extensions:
+
+```typescript
+client.extensions.sync.reconnect({
+  url: 'wss://new-server.com/rooms/blog',
+  token: 'new-token',
+});
+```
+
+## Multi-Device Sync
+
+Epicenter supports connecting to **multiple sync nodes** simultaneously:
+
+```typescript
+const client = createWorkspace(definition)
+  .withExtension('persistence', indexeddbPersistence)
+  .withExtension('syncDesktop', createSyncExtension({
+    url: 'ws://desktop.local:3913/rooms/{id}',
+  }))
+  .withExtension('syncLaptop', createSyncExtension({
+    url: 'ws://laptop.local:3913/rooms/{id}',
+  }))
+  .withExtension('syncCloud', createSyncExtension({
+    url: 'wss://cloud.myapp.com/rooms/{id}',
+  }));
+```
+
+### Multi-Device Topology
+
+```
+   PHONE                   LAPTOP                    DESKTOP
+   ┌──────────┐           ┌──────────┐              ┌──────────┐
+   │ Browser  │           │ Browser  │              │ Browser  │
+   │ Y.Doc    │           │ Y.Doc    │              │ Y.Doc    │
+   └────┬─────┘           └────┬─────┘              └────┬─────┘
+        │                      │                         │
+   (no server)            ┌────▼─────┐              ┌────▼─────┐
+        │                 │ Elysia   │◄────────────►│ Elysia   │
+        │                 │ :3913    │  server-to-  │ :3913    │
+        │                 └────┬─────┘    server    └────┬─────┘
+        │                      │                         │
+        └──────────────────────┴─────────────────────────┘
+                           Connect to multiple nodes
+```
+
+### Server-to-Server Sync
+
+Servers can sync with each other (but not themselves):
+
+```typescript
+// Desktop server connects to laptop + cloud (not itself!)
+const client = createWorkspace(definition)
+  .withExtension('persistence', filesystemPersistence({ ... }))
+  .withExtension('syncToLaptop', createSyncExtension({
+    url: 'ws://laptop.local:3913/rooms/{id}',
+  }))
+  .withExtension('syncToCloud', createSyncExtension({
+    url: 'wss://cloud.myapp.com/rooms/{id}',
+  }));
+```
+
+<Info>
+  Yjs supports multiple providers simultaneously. Changes merge automatically via CRDTs regardless of which provider delivers them first.
+</Info>
+
+## Awareness (Presence)
+
+The sync extension includes built-in awareness for user presence:
+
+```typescript
+// Set local presence
+client.awareness.setLocal({
+  user: { name: 'Alice', color: '#FF6B35' },
+  cursor: { x: 100, y: 200 },
+});
+
+// Get all connected users
+const users = client.awareness.getAll();
+for (const [clientId, state] of users) {
+  console.log(`User ${clientId}:`, state.user);
+}
+
+// Watch for presence changes
+client.awareness.observe((changes) => {
+  for (const [clientId, type] of changes) {
+    if (type === 'added') {
+      console.log(`User ${clientId} joined`);
+    } else if (type === 'removed') {
+      console.log(`User ${clientId} left`);
+    }
+  }
+});
+```
+
+See [Client Methods](/api/client-methods) for full details on awareness operations.
+
+## Sync Protocol
+
+The sync extension uses the standard y-websocket protocol:
+
+### Initial Sync (Connect)
+
+1. Client opens WebSocket to `/rooms/{workspaceId}`
+2. Server sends **sync step 1** (full state vector)
+3. Client sends **sync step 2** (missing updates)
+4. Server sends missing updates to client
+5. Client and server are now in sync
+
+### Incremental Updates (Ongoing)
+
+1. Client makes a change to Y.Doc
+2. Client sends **update message** to server
+3. Server broadcasts update to all other connected clients
+4. All Y.Docs converge via CRDTs
+
+### Sync Status Extension
+
+The sync extension includes a custom message type (102) for tracking local changes:
+
+```typescript
+// Check if local changes are pending sync
+if (client.extensions.sync.provider.hasLocalChanges) {
+  console.warn('Unsaved changes detected');
+}
+```
+
+## Error Handling
+
+### Connection Errors
+
+Handle connection failures:
+
+```typescript
+const { provider } = client.extensions.sync;
+
+provider.on('connection-error', (error) => {
+  console.error('Sync connection failed:', error);
+  // Show UI warning
+});
+
+provider.on('status', ({ status }) => {
+  if (status === 'disconnected') {
+    console.warn('Disconnected from sync server');
+    // Show offline indicator
+  } else if (status === 'connected') {
+    console.log('Reconnected to sync server');
+    // Hide offline indicator
+  }
+});
+```
+
+### Authentication Errors
+
+Handle auth failures:
+
+```typescript
+provider.on('connection-close', ({ code, reason }) => {
+  if (code === 4401) {
+    console.error('Authentication failed:', reason);
+    // Redirect to login
+  }
+});
+```
+
+## Complete Example
+
+Here's a full example with sync, persistence, and awareness:
+
+```typescript
+import { createWorkspace, defineWorkspace, defineTable } from '@epicenter/workspace';
+import { indexeddbPersistence } from '@epicenter/workspace/extensions/sync/web';
+import { createSyncExtension } from '@epicenter/workspace/extensions/sync';
+import { type } from 'arktype';
+
+const definition = defineWorkspace({
+  id: 'collaborative-notes',
+  tables: {
+    notes: defineTable(
+      type({
+        id: 'string',
+        title: 'string',
+        content: 'string',
+        _v: '1',
+      })
+    ),
+  },
+  awareness: {
+    user: type({ name: 'string', color: 'string' }),
+    cursor: type({ x: 'number', y: 'number' }),
+  },
+});
+
+const client = createWorkspace(definition)
+  .withExtension('persistence', indexeddbPersistence)
+  .withExtension('sync', createSyncExtension({
+    url: 'ws://localhost:3913/rooms/{id}',
+  }));
+
+await client.whenReady;
+
+// Set user presence
+client.awareness.setLocal({
+  user: { name: 'Alice', color: '#FF6B35' },
+  cursor: { x: 0, y: 0 },
+});
+
+// Create a note (syncs to all clients)
+client.tables.notes.set({
+  id: '1',
+  title: 'Shared Note',
+  content: 'This note is synced across all devices.',
+  _v: 1,
+});
+
+// Watch for remote changes
+client.tables.notes.observe((changedIds) => {
+  for (const id of changedIds) {
+    const result = client.tables.notes.get(id);
+    if (result.status === 'valid') {
+      console.log('Note updated:', result.row.title);
+    }
+  }
+});
+
+// Watch for user presence
+client.awareness.observe((changes) => {
+  for (const [clientId, type] of changes) {
+    if (type === 'added') {
+      const state = client.awareness.getAll().get(clientId);
+      console.log(`${state?.user?.name} joined`);
+    }
+  }
+});
+
+// Cleanup on exit
+await client.destroy();
+```
+
+## Performance Considerations
+
+### Connection Pooling
+
+Reuse WebSocket connections across workspaces:
+
+```typescript
+// Share connection URL across workspaces
+const SYNC_URL = 'ws://localhost:3913/rooms/{id}';
+
+const blog = createWorkspace(blogDef)
+  .withExtension('sync', createSyncExtension({ url: SYNC_URL }));
+
+const auth = createWorkspace(authDef)
+  .withExtension('sync', createSyncExtension({ url: SYNC_URL }));
+```
+
+### Bandwidth Optimization
+
+Yjs uses efficient binary encoding:
+
+- **Delta updates** — Only changed data is sent
+- **Compression** — Updates are gzip-compressed
+- **Batching** — Multiple changes are coalesced
+
+### Offline Support
+
+Yjs works offline and syncs when reconnected:
+
+```typescript
+// Make changes offline
+client.tables.notes.set({ id: '1', title: 'Offline Edit', _v: 1 });
+
+// Changes are queued locally
+// When reconnected, sync provider sends all pending updates
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Client Methods" icon="users" href="/api/client-methods">
+    Build collaborative features with presence
+  </Card>
+  <Card title="Server Setup" icon="server" href="/guides/server-setup">
+    Deploy your own sync server
+  </Card>
+  <Card title="Multi-Device Guide" icon="devices" href="/guides/multi-device-sync">
+    Advanced multi-device sync patterns
+  </Card>
+  <Card title="SQLite Extension" icon="database" href="/extensions/sqlite">
+    Query synced data with SQL
+  </Card>
+</CardGroup>

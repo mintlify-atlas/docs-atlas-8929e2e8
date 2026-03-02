@@ -1,0 +1,533 @@
+---
+title: 'defineMutation()'
+description: 'Define write operations with full type inference'
+---
+
+## Overview
+
+Defines a mutation (write operation) with full type inference. Returns a callable function with metadata properties (`type`, `input`, `description`).
+
+Mutations are operations that modify state or have side effects. When exposed via the server adapter, mutations map to HTTP POST requests.
+
+<Note>
+  The returned action **is** the function — call it directly. There is no `.handler` property.
+</Note>
+
+## Signature
+
+```typescript
+// Without input
+function defineMutation<TOutput = unknown>(
+  config: ActionConfig<undefined, TOutput>
+): Mutation<undefined, TOutput>
+
+// With input schema
+function defineMutation<TInput extends TSchema, TOutput = unknown>(
+  config: ActionConfig<TInput, TOutput>
+): Mutation<TInput, TOutput>
+```
+
+## Parameters
+
+<ParamField path="config" type="object" required>
+  Configuration object for the mutation definition
+  
+  <Expandable title="properties">
+    <ParamField path="config.handler" type="function" required>
+      The mutation implementation. Handlers close over their dependencies (client, tables, extensions) and have signature `(input?) => output`. Returns `TOutput` or `Promise<TOutput>` for async operations.
+    </ParamField>
+    
+    <ParamField path="config.input" type="TSchema">
+      Optional Standard Schema for validating and typing input. When provided, the handler receives typed and validated input. Supports ArkType, Zod v4.2+, Valibot, and other Standard Schema implementations.
+    </ParamField>
+    
+    <ParamField path="config.description" type="string">
+      Human-readable description for introspection and documentation
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+## Return Value
+
+Returns a `Mutation<TInput, TOutput>` — a callable function with metadata properties:
+
+<ResponseField name="type" type="'mutation'" required>
+  Discriminator property, always set to `'mutation'`
+</ResponseField>
+
+<ResponseField name="input" type="TSchema">
+  The input schema if provided during definition
+</ResponseField>
+
+<ResponseField name="description" type="string">
+  The description if provided during definition
+</ResponseField>
+
+## Closure-Based Design
+
+Handlers capture their dependencies (client, tables, extensions) via closure instead of receiving context as a parameter. This means:
+
+- Define mutations **after** creating the client they depend on
+- Dependencies are accessed through closure, not as parameters
+- No type annotations needed — TypeScript infers everything naturally
+- Standard JavaScript closure mechanics, not framework magic
+
+## Examples
+
+### Mutation without input
+
+```typescript
+import { createWorkspace, defineMutation } from '@epicenter/workspace';
+import { type } from 'arktype';
+
+// Step 1: Create client
+const client = createWorkspace({
+  id: 'blog',
+  tables: {
+    posts: defineTable(type({ 
+      id: 'string', 
+      title: 'string',
+      _v: '1'
+    }))
+  },
+  extensions: {
+    markdown: createMarkdownExtension(),
+  },
+});
+
+// Step 2: Define mutation that closes over client
+const syncMarkdown = defineMutation({
+  description: 'Sync markdown files to YJS',
+  handler: () => client.extensions.markdown.pullFromMarkdown(),
+});
+
+// Step 3: Use it
+syncMarkdown();                    // call directly
+console.log(syncMarkdown.type);    // 'mutation'
+```
+
+### Mutation with input schema
+
+```typescript
+import { type } from 'arktype';
+import { generateId } from '@epicenter/workspace';
+
+const createPost = defineMutation({
+  description: 'Create a new post',
+  input: type({ 
+    title: 'string',
+    content: 'string',
+  }),
+  handler: ({ title, content }) => {  // input is typed
+    const id = generateId();
+    client.tables.posts.upsert({ 
+      id, 
+      title, 
+      content,
+      _v: 1 as const,
+    });
+    return { id };
+  },
+});
+
+// Usage
+const result = createPost({ 
+  title: 'My Post', 
+  content: 'Hello world'
+});
+console.log(result.id); // newly created ID
+```
+
+### Async mutation
+
+```typescript
+const publishPost = defineMutation({
+  description: 'Publish a post and notify subscribers',
+  input: type({ postId: 'string' }),
+  handler: async ({ postId }) => {
+    // Update post status
+    const post = client.tables.posts.get(postId);
+    if (!post) throw new Error('Post not found');
+    
+    client.tables.posts.upsert({
+      ...post,
+      status: 'published',
+      publishedAt: new Date(),
+    });
+    
+    // Async notification (example)
+    await fetch('https://api.example.com/notify', {
+      method: 'POST',
+      body: JSON.stringify({ postId }),
+    });
+    
+    return { success: true };
+  },
+});
+
+// Usage with await
+const result = await publishPost({ postId: '123' });
+```
+
+### Mutation with validation
+
+```typescript
+import { type } from 'arktype';
+
+const updatePost = defineMutation({
+  description: 'Update post with validation',
+  input: type({
+    id: 'string',
+    title: 'string>=3<=200',      // 3-200 characters
+    tags: 'string[]<=10',         // Max 10 tags
+    status: "'draft' | 'published' | 'archived'",
+  }),
+  handler: ({ id, title, tags, status }) => {
+    const existing = client.tables.posts.get(id);
+    if (!existing) throw new Error('Post not found');
+    
+    client.tables.posts.upsert({
+      ...existing,
+      title,
+      tags,
+      status,
+      updatedAt: new Date(),
+    });
+    
+    return { success: true };
+  },
+});
+
+// Invalid input throws validation error
+try {
+  updatePost({ 
+    id: '123',
+    title: 'Hi',  // Too short (< 3 chars)
+    tags: [],
+    status: 'published',
+  });
+} catch (error) {
+  // Validation error: title must be >= 3 characters
+}
+```
+
+### Mutation with complex operations
+
+```typescript
+import { type } from 'arktype';
+import { generateId } from '@epicenter/workspace';
+
+const createPostWithTags = defineMutation({
+  description: 'Create post and associate tags',
+  input: type({
+    title: 'string',
+    content: 'string',
+    tagNames: 'string[]',
+  }),
+  handler: ({ title, content, tagNames }) => {
+    // Create or find tags
+    const tagIds = tagNames.map(name => {
+      const existing = client.tables.tags
+        .getAllValid()
+        .find(t => t.name === name);
+      
+      if (existing) return existing.id;
+      
+      const tagId = generateId();
+      client.tables.tags.upsert({ 
+        id: tagId, 
+        name,
+        _v: 1 as const,
+      });
+      return tagId;
+    });
+    
+    // Create post
+    const postId = generateId();
+    client.tables.posts.upsert({
+      id: postId,
+      title,
+      content,
+      tagIds,
+      _v: 1 as const,
+    });
+    
+    return { postId, tagIds };
+  },
+});
+```
+
+### Organizing mutations in namespaces
+
+```typescript
+const actions = {
+  posts: {
+    create: defineMutation({
+      input: type({ title: 'string', content: 'string' }),
+      handler: ({ title, content }) => {
+        const id = generateId();
+        client.tables.posts.upsert({ id, title, content, _v: 1 });
+        return { id };
+      },
+    }),
+    update: defineMutation({
+      input: type({ id: 'string', title: 'string?' }),
+      handler: ({ id, title }) => {
+        const post = client.tables.posts.get(id);
+        if (!post) throw new Error('Not found');
+        client.tables.posts.upsert({ ...post, ...(title && { title }) });
+      },
+    }),
+    delete: defineMutation({
+      input: type({ id: 'string' }),
+      handler: ({ id }) => {
+        client.tables.posts.delete(id);
+        return { success: true };
+      },
+    }),
+  },
+  sync: {
+    markdown: defineMutation({
+      handler: () => client.extensions.markdown.pullFromMarkdown(),
+    }),
+    remote: defineMutation({
+      handler: async () => {
+        await client.extensions.sync.connect();
+      },
+    }),
+  },
+};
+
+// Usage
+actions.posts.create({ title: 'New Post', content: 'Content' });
+actions.posts.delete({ id: '123' });
+await actions.sync.remote();
+```
+
+## Standard Schema Support
+
+The `input` parameter accepts any Standard Schema implementation:
+
+<Tabs>
+  <Tab title="ArkType">
+    ```typescript
+    import { type } from 'arktype';
+
+    defineMutation({
+      input: type({ 
+        email: 'email',
+        password: 'string>=8',
+      }),
+      handler: ({ email, password }) => {
+        // Validated at runtime
+      },
+    });
+    ```
+  </Tab>
+  
+  <Tab title="Zod">
+    ```typescript
+    import * as z from 'zod';
+
+    defineMutation({
+      input: z.object({
+        email: z.string().email(),
+        password: z.string().min(8),
+      }),
+      handler: ({ email, password }) => {
+        // Validated at runtime
+      },
+    });
+    ```
+  </Tab>
+  
+  <Tab title="Valibot">
+    ```typescript
+    import * as v from 'valibot';
+
+    defineMutation({
+      input: v.object({
+        email: v.pipe(v.string(), v.email()),
+        password: v.pipe(v.string(), v.minLength(8)),
+      }),
+      handler: ({ email, password }) => {
+        // Validated at runtime
+      },
+    });
+    ```
+  </Tab>
+</Tabs>
+
+## JSON Schema Generation
+
+Schemas are automatically converted to JSON Schema for API documentation:
+
+```typescript
+import { standardSchemaToJsonSchema } from '@epicenter/workspace';
+import { type } from 'arktype';
+
+const mutation = defineMutation({
+  input: type({ name: 'string', count: 'number' }),
+  handler: ({ name, count }) => { /* ... */ },
+});
+
+if (mutation.input) {
+  const jsonSchema = standardSchemaToJsonSchema(mutation.input);
+  // {
+  //   type: 'object',
+  //   properties: {
+  //     name: { type: 'string' },
+  //     count: { type: 'number' }
+  //   },
+  //   required: ['name', 'count']
+  // }
+}
+```
+
+<Warning>
+  **JSON Schema Limitations**: Some advanced type features cannot be represented in JSON Schema:
+  
+  - Morphs and transformations (e.g., `type('string').pipe(s => s.toUpperCase())`)
+  - Custom predicates (e.g., `type('string').narrow(s => s.startsWith('x'))`)
+  - Prototype-based types (e.g., `Date`, `RegExp` instances)
+  
+  These types will use fallback handlers during conversion. The conversion preserves as much of the schema as possible, with warnings logged for unconvertible parts.
+</Warning>
+
+## Type Inference
+
+TypeScript infers all types automatically:
+
+```typescript
+import { type } from 'arktype';
+
+// No type annotations needed!
+const createUser = defineMutation({
+  input: type({ 
+    email: 'email',
+    name: 'string',
+  }),
+  handler: ({ email, name }) => {
+    // email and name are inferred as string
+    const id = generateId();
+    client.tables.users.upsert({ id, email, name, _v: 1 });
+    return { id };
+  },
+});
+
+// Return type is inferred
+type Result = ReturnType<typeof createUser>;
+// Result = { id: string }
+```
+
+## Using with Adapters
+
+Mutations integrate seamlessly with Epicenter adapters:
+
+```typescript
+import { createActionsRouter } from '@epicenter/server';
+import { createCLI } from '@epicenter/cli';
+
+const actions = {
+  posts: {
+    create: defineMutation({
+      input: type({ title: 'string' }),
+      handler: ({ title }) => {
+        const id = generateId();
+        client.tables.posts.upsert({ id, title, _v: 1 });
+        return { id };
+      },
+    }),
+  },
+};
+
+// Server adapter: maps to HTTP POST /posts/create
+createActionsRouter({ client, actions });
+
+// CLI adapter: maps to command `posts:create --title "My Post"`
+createCLI({ client, actions });
+```
+
+## Best Practices
+
+### Return meaningful data
+
+```typescript
+// Good: Return IDs or confirmation
+const createPost = defineMutation({
+  input: type({ title: 'string' }),
+  handler: ({ title }) => {
+    const id = generateId();
+    client.tables.posts.upsert({ id, title, _v: 1 });
+    return { id, createdAt: new Date() };
+  },
+});
+
+// Avoid: Returning nothing makes it hard to track what was created
+const createPostBad = defineMutation({
+  input: type({ title: 'string' }),
+  handler: ({ title }) => {
+    client.tables.posts.upsert({ id: generateId(), title, _v: 1 });
+  },
+});
+```
+
+### Validate business logic
+
+```typescript
+const deletePost = defineMutation({
+  input: type({ id: 'string' }),
+  handler: ({ id }) => {
+    const post = client.tables.posts.get(id);
+    
+    // Validate before mutating
+    if (!post) {
+      throw new Error('Post not found');
+    }
+    
+    if (post.status === 'published') {
+      throw new Error('Cannot delete published posts');
+    }
+    
+    client.tables.posts.delete(id);
+    return { success: true };
+  },
+});
+```
+
+### Use transactions for multiple operations
+
+```typescript
+const transferOwnership = defineMutation({
+  input: type({ postId: 'string', newOwnerId: 'string' }),
+  handler: ({ postId, newOwnerId }) => {
+    // Get both records
+    const post = client.tables.posts.get(postId);
+    const newOwner = client.tables.users.get(newOwnerId);
+    
+    if (!post || !newOwner) {
+      throw new Error('Post or user not found');
+    }
+    
+    // Perform multiple updates atomically
+    client.tables.posts.upsert({
+      ...post,
+      ownerId: newOwnerId,
+      transferredAt: new Date(),
+    });
+    
+    client.tables.users.upsert({
+      ...newOwner,
+      postCount: newOwner.postCount + 1,
+    });
+    
+    return { success: true };
+  },
+});
+```
+
+## Related
+
+- [defineQuery()](/api/define-query) - Define read operations
+- [Action Types](/api/action-types) - Type guards and introspection
+- [Actions Concept](/concepts/actions) - Understanding the action system

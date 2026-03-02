@@ -1,0 +1,108 @@
+---
+title: Overview
+description: Free, open-source speech-to-text with local and cloud transcription options
+---
+
+Whispering is an open-source speech-to-text application. Press a keyboard shortcut, speak, and your words will transcribe, transform, then copy and paste at the cursor.
+
+<iframe
+  width="100%"
+  height="400"
+  src="https://www.youtube.com/embed/1jYgBMrfVZs"
+  title="Whispering Complete Setup Guide"
+  frameBorder="0"
+  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+  allowFullScreen
+/>
+
+## What is Whispering?
+
+Whispering is designed for quick transcriptions, not long recordings. It's built with transparency and data control in mind:
+
+- **Open-source and transparent**: Your data is stored locally on your device
+- **No middleman**: Audio goes directly from your machine to your chosen provider
+- **Local-first**: Use Whisper C++ for completely offline, private transcription
+- **Cloud options**: Or use Groq, OpenAI, ElevenLabs for fast, accurate results
+- **Cost-effective**: Pay providers directly, not subscription fees
+
+<Note>
+The terms **Epicenter Whispering** and **Whispering** are interchangeable and refer to the same app.
+</Note>
+
+## Key Features
+
+<CardGroup cols={2}>
+  <Card title="Voice Activity Detection" icon="microphone">
+    Hands-free recording that starts when you speak and stops when you're done. No need to hold keys.
+  </Card>
+  <Card title="AI Transformations" icon="wand-magic-sparkles">
+    Transform transcriptions with custom AI workflows: fix grammar, translate, format, or create custom prompts.
+  </Card>
+  <Card title="Multiple Providers" icon="cloud">
+    Choose from local (Whisper C++, Parakeet, Moonshine) or cloud providers (Groq, OpenAI, ElevenLabs, Deepgram, Mistral).
+  </Card>
+  <Card title="Tiny & Fast" icon="bolt">
+    Built with Svelte 5 and Tauri. Only ~22MB and starts instantly.
+  </Card>
+</CardGroup>
+
+## Use Cases
+
+Whispering is perfect for:
+
+- **Coding**: Dictate code comments, documentation, or commit messages
+- **Writing**: Draft emails, documents, or notes hands-free
+- **Thinking out loud**: Capture ideas while moving around
+- **Accessibility**: Hands-free text input for those who need it
+- **Quick notes**: Transcribe thoughts without breaking flow
+
+<Tip>
+Whispering is designed for quick transcriptions, not long recordings. For extended recording sessions, use a dedicated recording app.
+</Tip>
+
+## Cost Comparison
+
+When you cut out the middleman, you pay providers directly:
+
+| Service | Cost per Hour | Light Use (20 min/day) | Moderate Use (1 hr/day) | Heavy Use (3 hr/day) | Traditional Tools |
+|---------|---------------|------------------------|----------------------------|----------------------|-------------------|
+| `whisper-large-v3-turbo` (Groq) | $0.04 | $0.40/month | $1.20/month | $3.60/month | $15-30/month |
+| `whisper-large-v3` (Groq) | $0.111 | $1.11/month | $3.33/month | $9.99/month | $15-30/month |
+| `gpt-4o-mini-transcribe` (OpenAI) | $0.18 | $1.80/month | $5.40/month | $16.20/month | $15-30/month |
+| Local (Whisper C++) | $0.00 | $0.00/month | $0.00/month | $0.00/month | $15-30/month |
+
+## Platform Support
+
+Whispering runs on:
+
+- **macOS**: Apple Silicon (M1/M2/M3/M4) and Intel
+- **Windows**: 64-bit Windows 10 and later
+- **Linux**: Ubuntu, Debian, Fedora, and other distributions
+- **Web**: Any modern browser at [whispering.epicenterhq.com](https://whispering.epicenterhq.com)
+
+## Open Source Philosophy
+
+Whispering is open-source because fundamental tools shouldn't require trusting a black box. Companies pivot, get acquired, or shut down. But open source is forever.
+
+The codebase is well-documented and designed to be understood and audited. You know where your audio goes, how it's processed, and what data is stored.
+
+<Card title="View on GitHub" icon="github" href="https://github.com/EpicenterHQ/epicenter/tree/main/apps/whispering">
+  Explore the source code, contribute, or report issues
+</Card>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Installation" icon="download" href="/apps/whispering/installation">
+    Download and install Whispering for your platform
+  </Card>
+  <Card title="Setup" icon="gear" href="/apps/whispering/setup">
+    Configure transcription providers and API keys
+  </Card>
+  <Card title="Features" icon="stars" href="/apps/whispering/features">
+    Learn about VAD, transformations, and shortcuts
+  </Card>
+  <Card title="Contributing" icon="code" href="/apps/whispering/contributing">
+    Help build the future of open-source transcription
+  </Card>
+</CardGroup>

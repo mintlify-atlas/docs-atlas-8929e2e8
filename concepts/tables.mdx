@@ -1,0 +1,445 @@
+---
+title: "Tables"
+description: "YJS-backed tables, CRUD operations, and validation in Epicenter"
+icon: "table"
+---
+
+## Overview
+
+Tables are YJS-backed data structures that provide type-safe CRUD operations with automatic validation and migration. Every table operation updates the underlying Y.Doc, which triggers auto-sync to extensions like SQLite and markdown.
+
+## Table structure
+
+Each table is stored as a Y.Array in the Y.Doc, using Last-Write-Wins (LWW) entries:
+
+```typescript
+// Y.Array structure
+[
+  { key: 'post-1', val: { id: 'post-1', title: 'Hello', ... }, ts: 1706200000 },
+  { key: 'post-2', val: { id: 'post-2', title: 'World', ... }, ts: 1706200100 },
+]
+```
+
+Each entry includes:
+- `key` - The row ID for fast lookups
+- `val` - The complete row data
+- `ts` - Timestamp for conflict resolution
+
+<Info>
+The timestamp enables Last-Write-Wins conflict resolution when multiple devices edit the same row offline.
+</Info>
+
+## Defining tables
+
+Define tables with versioned schemas using Standard Schema (TypeBox, Zod, etc.):
+
+```typescript
+import { defineTable } from '@epicenter/workspace';
+import { type } from 'typebox';
+
+const posts = defineTable(
+  type({
+    id: type.String(),
+    _v: type.Literal(1),
+    title: type.String(),
+    content: type.Optional(type.String()),
+    published: type.Boolean(),
+    views: type.Number(),
+    createdAt: type.Number(),
+  })
+).version();
+```
+
+### Required fields
+
+Every table row must include:
+
+```typescript
+{
+  id: type.String(),      // Unique identifier
+  _v: type.Literal(1),    // Schema version (literal type)
+  // ... your fields
+}
+```
+
+### Schema versioning
+
+Add new schema versions with migration functions:
+
+```typescript
+const posts = defineTable(
+  // Version 1
+  type({
+    id: type.String(),
+    _v: type.Literal(1),
+    title: type.String(),
+    published: type.Boolean(),
+  })
+)
+  .version(
+    // Version 2
+    type({
+      id: type.String(),
+      _v: type.Literal(2),
+      title: type.String(),
+      tags: type.Array(type.String()),
+      published: type.Boolean(),
+    }),
+    // Migration v1 → v2
+    (v1) => ({ ...v1, _v: 2, tags: [] })
+  );
+```
+
+<Tip>
+Migrations run automatically when reading data. You never need to manually migrate your data.
+</Tip>
+
+## CRUD operations
+
+Access table operations via `client.tables.<tableName>`:
+
+### Set (upsert)
+
+Create or replace a row:
+
+```typescript
+const id = generateId();
+client.tables.posts.set({
+  id,
+  _v: 1,
+  title: 'Hello World',
+  content: 'My first post',
+  published: false,
+  views: 0,
+  createdAt: Date.now(),
+});
+```
+
+<Note>
+`set()` performs a complete replacement of the row. To update specific fields, use `update()`.
+</Note>
+
+### Get
+
+Retrieve a single row by ID:
+
+```typescript
+const result = client.tables.posts.get('post-1');
+
+switch (result.status) {
+  case 'valid':
+    console.log('Post:', result.row.title);
+    break;
+  case 'invalid':
+    console.error('Validation error:', result.errors);
+    break;
+  case 'not_found':
+    console.log('Post not found');
+    break;
+}
+```
+
+The result is a discriminated union:
+
+- `{ status: 'valid', row: T }` - Row exists and passes validation
+- `{ status: 'invalid', id: string, errors: Issue[], row: unknown }` - Row exists but fails validation
+- `{ status: 'not_found', id: string, row: undefined }` - Row doesn't exist
+
+### Update
+
+Update specific fields:
+
+```typescript
+const result = client.tables.posts.update('post-1', {
+  views: 42,
+  published: true,
+});
+
+if (result.status === 'updated') {
+  console.log('Updated:', result.row);
+} else if (result.status === 'not_found') {
+  console.log('Post not found locally');
+} else {
+  console.error('Validation error:', result.errors);
+}
+```
+
+<Warning>
+`update()` is a no-op if the row doesn't exist locally. This prevents creating partial rows that could overwrite complete rows from other devices during sync.
+</Warning>
+
+### Delete
+
+Delete a row:
+
+```typescript
+const result = client.tables.posts.delete('post-1');
+
+if (result.status === 'deleted') {
+  console.log('Post deleted');
+} else {
+  console.log('Post not found locally');
+}
+```
+
+### Get all
+
+Retrieve all rows with validation status:
+
+```typescript
+const results = client.tables.posts.getAll();
+
+for (const result of results) {
+  if (result.status === 'valid') {
+    console.log('Valid:', result.row.title);
+  } else {
+    console.log('Invalid:', result.id, result.errors);
+  }
+}
+```
+
+Get only valid rows:
+
+```typescript
+const posts = client.tables.posts.getAllValid();
+// Returns: Post[]
+```
+
+Get only invalid rows:
+
+```typescript
+const errors = client.tables.posts.getAllInvalid();
+// Returns: InvalidRowResult[]
+```
+
+### Filter and find
+
+Filter valid rows:
+
+```typescript
+const published = client.tables.posts.filter((row) => row.published);
+```
+
+Find first matching row:
+
+```typescript
+const first = client.tables.posts.find((row) => row.views > 100);
+if (first) {
+  console.log('Popular post:', first.title);
+}
+```
+
+<Info>
+`filter()` and `find()` only operate on valid rows. Invalid rows are skipped automatically.
+</Info>
+
+### Check existence
+
+```typescript
+if (client.tables.posts.has('post-1')) {
+  console.log('Post exists');
+}
+```
+
+### Count rows
+
+```typescript
+const total = client.tables.posts.count();
+console.log('Total posts:', total);
+```
+
+### Clear all rows
+
+```typescript
+client.tables.posts.clear();
+```
+
+<Warning>
+`clear()` deletes all rows immediately. This operation syncs to all devices.
+</Warning>
+
+## Observing changes
+
+Watch for real-time changes:
+
+```typescript
+const unsubscribe = client.tables.posts.observe((changedIds, transaction) => {
+  console.log('Changed IDs:', Array.from(changedIds));
+  
+  // Fetch current state for each changed ID
+  for (const id of changedIds) {
+    const result = client.tables.posts.get(id);
+    if (result.status === 'valid') {
+      console.log('Updated post:', result.row);
+    }
+  }
+});
+
+// Stop watching
+unsubscribe();
+```
+
+The observer callback receives:
+- `changedIds` - Set of row IDs that changed
+- `transaction` - Y.Transaction for origin checking (local vs remote)
+
+<Tip>
+Changes are batched per transaction. Bulk operations fire the observer once, not once per row.
+</Tip>
+
+## Batch operations
+
+Wrap multiple operations in a transaction:
+
+```typescript
+client.batch(() => {
+  client.tables.posts.set({ id: '1', _v: 1, title: 'Post 1', ... });
+  client.tables.posts.set({ id: '2', _v: 1, title: 'Post 2', ... });
+  client.tables.posts.set({ id: '3', _v: 1, title: 'Post 3', ... });
+});
+// Observer fires once for all three changes
+```
+
+Benefits:
+- Atomic updates (all succeed or all fail)
+- Single observer notification
+- Better performance for bulk operations
+
+## Validation
+
+Validation happens automatically on read operations:
+
+```typescript
+const result = client.tables.posts.get('post-1');
+
+if (result.status === 'invalid') {
+  console.log('Validation errors:', result.errors);
+  // [
+  //   { message: 'Expected string, got number', path: ['title'] },
+  //   { message: 'Required field missing', path: ['published'] }
+  // ]
+}
+```
+
+Validation uses the table's schema (TypeBox, Zod, etc.) and is performed:
+- On `get()` - Single row validation
+- On `getAll()` - All rows validated individually
+- On `update()` - Updated row validated before write
+- Never on `set()` - Writes always succeed (validation on read)
+
+<Info>
+Writes never fail due to validation. Invalid data is accepted but flagged during reads. This prevents sync conflicts and data loss.
+</Info>
+
+## Migration on read
+
+Old schema versions are migrated automatically:
+
+```typescript
+// Stored data is v1
+{ id: '1', _v: 1, title: 'Post', published: false }
+
+// Schema is now v2 (added tags field)
+const result = client.tables.posts.get('1');
+if (result.status === 'valid') {
+  console.log(result.row);
+  // { id: '1', _v: 2, title: 'Post', tags: [], published: false }
+}
+```
+
+Migrations:
+- Run automatically during `get()`, `getAll()`, `getAllValid()`
+- Apply sequentially (v1 → v2 → v3)
+- Return the latest schema version
+- Never modify stored data (migrations are read-time only)
+
+<Note>
+Migrated data is only written back if you explicitly `set()` or `update()` the row.
+</Note>
+
+## Complex queries with SQLite
+
+For complex queries (filtering, sorting, joins, aggregations), use the SQLite extension:
+
+```typescript
+import { eq, desc } from '@epicenter/workspace';
+
+// Get published posts ordered by views
+const published = await client.extensions.sqlite.posts
+  .select()
+  .where(eq(client.extensions.sqlite.posts.published, true))
+  .orderBy(desc(client.extensions.sqlite.posts.views))
+  .limit(10);
+
+// Aggregate queries
+const stats = await client.extensions.sqlite.posts
+  .select({
+    total: count(),
+    avgViews: avg(client.extensions.sqlite.posts.views),
+  });
+```
+
+See the [SQLite extension guide](/extensions/sqlite) for more query examples.
+
+## Best practices
+
+<AccordionGroup>
+  <Accordion title="Use set() for full replacement, update() for partial">
+    ```typescript
+    // Full replacement
+    client.tables.posts.set({ id: '1', _v: 1, title: 'New', ... });
+    
+    // Partial update
+    client.tables.posts.update('1', { views: 42 });
+    ```
+  </Accordion>
+  
+  <Accordion title="Always check result.status before using data">
+    ```typescript
+    const result = client.tables.posts.get('1');
+    if (result.status === 'valid') {
+      console.log(result.row.title); // Safe access
+    }
+    ```
+  </Accordion>
+  
+  <Accordion title="Use batch() for multiple operations">
+    ```typescript
+    client.batch(() => {
+      // All operations in a single transaction
+      client.tables.posts.set(post1);
+      client.tables.posts.set(post2);
+      client.tables.posts.delete('old-id');
+    });
+    ```
+  </Accordion>
+  
+  <Accordion title="Use SQLite for complex queries">
+    ```typescript
+    // Simple lookup: use Y.Doc
+    const post = client.tables.posts.get('1');
+    
+    // Complex query: use SQLite
+    const popular = await client.extensions.sqlite.posts
+      .select()
+      .where(gt(client.extensions.sqlite.posts.views, 100));
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Actions" icon="bolt" href="/concepts/actions">
+    Define queries and mutations for your tables
+  </Card>
+  <Card title="Extensions" icon="puzzle-piece" href="/concepts/extensions">
+    Add SQLite, markdown, and custom extensions
+  </Card>
+  <Card title="Table operations guide" icon="book" href="/guides/table-operations">
+    Detailed guide with real-world examples
+  </Card>
+  <Card title="SQLite queries" icon="database" href="/guides/sqlite-queries">
+    Learn advanced query patterns
+  </Card>
+</CardGroup>

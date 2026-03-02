@@ -1,0 +1,367 @@
+---
+title: 'Client Properties & Methods'
+description: 'Complete reference for WorkspaceClient properties and methods'
+icon: 'rectangle-terminal'
+---
+
+## Overview
+
+The `WorkspaceClient` is returned by `createWorkspace()` and provides access to all workspace operations. It includes table helpers, KV stores, awareness, extensions, and lifecycle management.
+
+```typescript
+const client = createWorkspace({ id: 'my-app', tables: { posts } });
+```
+
+## Properties
+
+### id
+
+<ResponseField name="id" type="string">
+  Workspace identifier. Matches the `id` passed to `createWorkspace()`.
+  
+  ```typescript
+  console.log(client.id); // "my-app"
+  ```
+</ResponseField>
+
+### ydoc
+
+<ResponseField name="ydoc" type="Y.Doc">
+  The underlying Yjs document instance. Escape hatch for advanced operations.
+  
+  ```typescript
+  // Access raw Yjs data structures
+  const map = client.ydoc.getMap('custom');
+  map.set('key', 'value');
+  
+  // Monitor all transactions
+  client.ydoc.on('update', (update) => {
+    console.log('Y.Doc updated:', update);
+  });
+  ```
+</ResponseField>
+
+### definitions
+
+<ResponseField name="definitions" type="object">
+  Workspace definitions for introspection
+  
+  <Expandable title="Properties">
+    <ResponseField name="tables" type="TableDefinitions">
+      Map of table definitions
+    </ResponseField>
+    
+    <ResponseField name="kv" type="KvDefinitions">
+      Map of KV definitions
+    </ResponseField>
+    
+    <ResponseField name="awareness" type="AwarenessDefinitions">
+      Map of awareness field schemas
+    </ResponseField>
+  </Expandable>
+  
+  Useful for generating type information, API schemas, or runtime validation.
+</ResponseField>
+
+### tables
+
+<ResponseField name="tables" type="TablesHelper<TTableDefinitions>">
+  Typed helpers for table CRUD operations. Pure data access - no document management.
+  
+  Each table provides:
+  - `set(row)` - Insert or replace a row
+  - `get(id)` - Get a single row by ID
+  - `getAll()` - Get all rows with validation status
+  - `getAllValid()` - Get only valid rows
+  - `getAllInvalid()` - Get only invalid rows
+  - `filter(predicate)` - Filter valid rows
+  - `find(predicate)` - Find first matching valid row
+  - `update(id, partial)` - Partial update by ID
+  - `delete(id)` - Delete a row
+  - `clear()` - Delete all rows
+  - `observe(callback)` - Watch for changes
+  - `count()` - Get total row count
+  - `has(id)` - Check if row exists
+  - `parse(id, input)` - Validate external data
+  
+  See [Table Operations](/api/table-operations) for detailed documentation.
+</ResponseField>
+
+#### Example: Table Operations
+
+```typescript
+// Insert a row
+client.tables.posts.set({ id: '1', title: 'Hello', _v: 1 });
+
+// Get a row
+const result = client.tables.posts.get('1');
+if (result.status === 'valid') {
+  console.log(result.row.title);
+}
+
+// Query rows
+const published = client.tables.posts.filter(
+  (post) => post.published === true
+);
+
+// Watch for changes
+const unsubscribe = client.tables.posts.observe((changedIds) => {
+  console.log('Changed:', Array.from(changedIds));
+});
+```
+
+### documents
+
+<ResponseField name="documents" type="DocumentsHelper<TTableDefinitions>">
+  Document managers for tables with `.withDocument()` configurations.
+  
+  Only tables that declared document configs via `.withDocument()` appear in this namespace. Each document manager provides:
+  - `open(rowOrGuid)` - Open a content Y.Doc
+  - `close(rowOrGuid)` - Close a document
+  - `closeAll()` - Close all open documents
+  
+  Documents auto-update the row's `updatedAt` column when content changes.
+</ResponseField>
+
+#### Example: Document Operations
+
+```typescript
+// Open a document
+const handle = await client.documents.files.content.open(row);
+
+// Read content
+const text = handle.read();
+
+// Write content (updatedAt auto-bumped)
+handle.write('new content');
+
+// Access raw Y.Doc
+handle.ydoc.getText('body').insert(0, 'prefix: ');
+
+// Access document extension exports
+await handle.exports.persistence?.whenReady;
+
+// Close when done
+await client.documents.files.content.close(row);
+```
+
+### kv
+
+<ResponseField name="kv" type="KvHelper<TKvDefinitions>">
+  Typed key-value store with schema validation and migration.
+  
+  Each KV field provides:
+  - `get(key)` - Get a value with validation
+  - `set(key, value)` - Set a value
+  - `delete(key)` - Delete a value
+  - `observe(key, callback)` - Watch for changes
+</ResponseField>
+
+#### Example: KV Operations
+
+```typescript
+// Set a value
+client.kv.set('theme', { mode: 'dark' });
+
+// Get a value
+const result = client.kv.get('theme');
+if (result.status === 'valid') {
+  console.log(result.value.mode);
+}
+
+// Watch for changes
+const unsubscribe = client.kv.observe('theme', (change) => {
+  if (change.type === 'set') {
+    console.log('New theme:', change.value);
+  } else {
+    console.log('Theme deleted');
+  }
+});
+```
+
+### awareness
+
+<ResponseField name="awareness" type="AwarenessHelper<TAwarenessDefinitions>">
+  Real-time presence system backed by y-protocols Awareness.
+  
+  Each awareness field is independently validated against its schema:
+  - `setLocal(state)` - Set local client's awareness state (merge)
+  - `setLocalField(key, value)` - Set a single field
+  - `getLocal()` - Get local state
+  - `getLocalField(key)` - Get a single local field
+  - `getAll()` - Get all clients' states
+  - `observe(callback)` - Watch for changes
+  - `raw` - Raw Awareness instance for providers
+</ResponseField>
+
+#### Example: Awareness Operations
+
+```typescript
+// Set local presence
+client.awareness.setLocal({
+  cursor: { x: 100, y: 200 },
+  selection: { start: 0, end: 10 }
+});
+
+// Set a single field
+client.awareness.setLocalField('cursor', { x: 150, y: 250 });
+
+// Get all clients
+const clients = client.awareness.getAll();
+for (const [clientId, state] of clients) {
+  console.log(`Client ${clientId}:`, state.cursor);
+}
+
+// Watch for changes
+client.awareness.observe((changes) => {
+  for (const [clientId, changeType] of changes) {
+    console.log(`Client ${clientId} ${changeType}`);
+  }
+});
+
+// Pass to sync provider
+const provider = new WebsocketProvider(
+  url,
+  client.id,
+  client.ydoc,
+  { awareness: client.awareness.raw }
+);
+```
+
+### extensions
+
+<ResponseField name="extensions" type="TExtensions">
+  Extension exports accumulated via `.withExtension()` calls.
+  
+  Each entry is the flat exports object returned by the extension factory. Access exports directly - no wrapper needed.
+  
+  ```typescript
+  const client = createWorkspace({ id: 'app', tables })
+    .withExtension('persistence', ({ ydoc }) => {
+      const idb = new IndexeddbPersistence(ydoc.guid, ydoc);
+      return {
+        clearData: () => idb.clearData(),
+        whenReady: idb.whenSynced,
+        destroy: () => idb.destroy()
+      };
+    });
+  
+  // Access extension exports
+  await client.extensions.persistence.whenReady;
+  client.extensions.persistence.clearData();
+  ```
+</ResponseField>
+
+## Methods
+
+### batch()
+
+Execute multiple operations atomically in a single Yjs transaction.
+
+<ParamField path="fn" type="() => void" required>
+  Callback containing table/KV operations to batch
+</ParamField>
+
+Groups all mutations inside the callback into one transaction:
+- Observers fire once (not per-operation)
+- Creates a single undo/redo step
+- All changes are applied together
+
+<Warning>
+  Yjs transactions do NOT roll back on error. If the callback throws, any mutations that already executed are still applied.
+</Warning>
+
+<Note>
+  Nested `batch()` calls are safe - Yjs transact is reentrant, so inner calls are absorbed by the outer transaction.
+</Note>
+
+#### Example: Single Table Batching
+
+```typescript
+client.batch(() => {
+  client.tables.posts.set({ id: '1', title: 'First', _v: 1 });
+  client.tables.posts.set({ id: '2', title: 'Second', _v: 1 });
+  client.tables.posts.delete('3');
+});
+// Observer fires once with all 3 changed IDs
+```
+
+#### Example: Cross-Table + KV Batching
+
+```typescript
+client.batch(() => {
+  client.tables.tabs.set({ id: '1', url: 'https://...', _v: 1 });
+  client.tables.windows.set({ id: 'w1', name: 'Main', _v: 1 });
+  client.kv.set('lastSync', new Date().toISOString());
+});
+// All three writes are one atomic transaction
+```
+
+### whenReady
+
+<ResponseField name="whenReady" type="Promise<void>">
+  Promise resolving when all extensions are initialized.
+  
+  Composite of all extension `whenReady` promises. Use as a render gate in UI frameworks.
+  
+  ```typescript
+  // Wait for all extensions before rendering
+  await client.whenReady;
+  console.log('Client ready!');
+  ```
+  
+  ```svelte
+  <!-- Svelte render gate -->
+  {#await client.whenReady}
+    <Loading />
+  {:then}
+    <App />
+  {/await}
+  ```
+  
+  If any extension's `whenReady` rejects, the workspace automatically calls `destroy()` and propagates the error.
+</ResponseField>
+
+### destroy()
+
+Cleanup all resources - extensions, observers, and the Y.Doc.
+
+<ResponseField name="destroy" type="() => Promise<void>">
+  Async cleanup function
+  
+  Destruction order:
+  1. Close all open documents
+  2. Call extension `destroy()` in LIFO order (last added = first destroyed)
+  3. Destroy awareness instance
+  4. Destroy Y.Doc
+  
+  If any extension cleanup fails, errors are collected and thrown together after attempting all cleanups.
+  
+  ```typescript
+  // Manual cleanup
+  await client.destroy();
+  
+  // Async dispose (TC39 Explicit Resource Management)
+  await using client = createWorkspace({ id: 'app', tables });
+  // Auto-destroyed when scope exits
+  ```
+</ResponseField>
+
+### [Symbol.asyncDispose]
+
+<ResponseField name="[Symbol.asyncDispose]" type="() => Promise<void>">
+  Async dispose support for TC39 Explicit Resource Management proposal.
+  
+  Calls `destroy()` under the hood. Enables automatic cleanup with `await using`.
+  
+  ```typescript
+  await using client = createWorkspace({ id: 'app', tables });
+  // Client auto-destroyed when scope exits
+  ```
+</ResponseField>
+
+## Related
+
+- [createWorkspace()](/api/create-client) - Create a workspace client
+- [Table Operations](/api/table-operations) - Detailed table operations
+- [Schema Types](/api/column-types) - Define table and KV schemas
